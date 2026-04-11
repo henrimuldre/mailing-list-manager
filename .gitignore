@@ -1,0 +1,36 @@
+# Secrets and local config
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Virtual environments
+.venv/
+venv/
+
+# Runtime data
+logs/
+state/
+*.pid
+*.lock
+list/backoff_until.txt
+
+# Local editor / tooling
+.codex
+.idea/
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Backups and private exports
+*.zip
+*.ods
+list-admin/sql/dump*.sql
