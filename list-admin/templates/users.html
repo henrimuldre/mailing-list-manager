@@ -1,0 +1,282 @@
+{% extends "layout_sidebar.html" %}
+{% block content %}
+{% set langs = t('languages') %}
+<h2>{{ t("users") }}</h2>
+
+<div class="panel">
+    <div class="panel-header" style="display:flex; justify-content:space-between; align-items:center;">
+        <h3>{{ t("all_users") }}</h3>
+        <button type="button" class="btn primary" onclick="openModal('addUserModal')">
+            + {{ t("add_user") }}
+        </button>
+    </div>
+    <div class="table-scroll">
+        <table class="users-table">
+            <thead>
+                <tr>
+                    {% set cols = {
+                    "username": t("username"),
+                    "first_name": t("first_name"),
+                    "last_name": t("last_name"),
+                    "role": t("role"),
+                    "language": t("language"),
+                    "password_needs_reset": t("password_needs_reset"),
+                    "last_login": t("last_login")
+                    } %}
+                    {% for col, label in cols.items() %}
+                    {% set next_dir = 'asc' if sort != col or dir == 'desc' else 'desc' %}
+                    <th class="{% if sort == col %}sorted {{ dir }}{% endif %}">
+                        <a href="{{ url_for('users', sort=col, dir=next_dir) }}">
+                            {{ label }}
+                        </a>
+                    </th>
+                    {% endfor %}
+                    <th>{{ t("actions") }}</th>
+                </tr>
+            </thead>
+
+
+            <tbody>
+                {% for u in users %}
+                <tr>
+                    <td>{{ u.username }}</td>
+                    <td>{{ u.first_name or "" }}</td>
+                    <td>{{ u.last_name or "" }}</td>
+                    <td>{{ t(u.role) }}</td>
+                    <td>{{ langs.get(u.language, u.language or "") }}</td>
+                    <td>
+                        {% if u.password_needs_reset %}
+                        {{ t("yes") }}
+                        {% else %}
+                        {{ t("no") }}
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if u.last_login %}
+                        {{ u.last_login|datetimeformat }}
+                        {% else %}
+                        {{ t("never_logged_in") }}
+                        {% endif %}
+                    </td>
+                    <td>
+                        <button
+                            type="button"
+                            class="btn js-edit-user"
+                            data-username="{{ u.username }}"
+                            data-first-name="{{ u.first_name or '' }}"
+                            data-last-name="{{ u.last_name or '' }}"
+                            data-role="{{ u.role }}"
+                            data-language="{{ u.language or 'en' }}"
+                            data-needs-reset="{{ 'true' if u.password_needs_reset else 'false' }}"
+                        >
+                            {{ t("edit") }}
+                        </button>
+                        {% if u.username != session.get('user') %}
+                        <button
+                            type="button"
+                            class="btn danger js-delete-user"
+                            data-username="{{ u.username }}"
+                        >
+                            {{ t("delete") }}
+                        </button>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+
+{# Edit User modal #}
+<div id="editUserModal" class="modal" onclick="closeModal('editUserModal')">
+    <div class="modal-content" onclick="event.stopPropagation()">
+        <span class="modal-close" onclick="closeModal('editUserModal')">&times;</span>
+        <h3>{{ t("edit_user") }}</h3>
+        <form id="editUserForm" method="post" class="form">
+            <div class="form-group">
+                <label for="editUsername">{{ t("username") }}</label>
+                <input type="text" name="username" id="editUsername" required {% if g.role !='admin' %}readonly{% endif %}>
+            </div>
+
+            <div class="form-group">
+                <label for="editFirstName">{{ t("first_name") }}</label>
+                <input type="text" name="first_name" id="editFirstName">
+            </div>
+
+            <div class="form-group">
+                <label for="editLastName">{{ t("last_name") }}</label>
+                <input type="text" name="last_name" id="editLastName">
+            </div>
+
+            <div class="form-group">
+                <label for="editPassword">{{ t("new_password") }}</label>
+                <input type="password" name="password" id="editPassword">
+            </div>
+
+            <div class="form-group">
+                <label for="editRole">{{ t("role") }}</label>
+                <select name="role" id="editRole">
+                    <option value="user">{{ t("user") }}</option>
+                    <option value="admin">{{ t("admin") }}</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="editLanguage">{{ t("language") }}</label>
+                <select name="language" id="editLanguage">
+                    {% for code, label in langs|dictsort(by='value') %}
+                    <option value="{{ code }}">{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>
+                    {{ t("password_needs_reset") }}
+                    <label class="toggle" for="editPasswordNeedsReset">
+                        <input type="checkbox" name="password_needs_reset" id="editPasswordNeedsReset" value="1">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </label>
+            </div>
+
+            <div class="form-actions">
+                <button type="submit" class="btn primary">{{ t("save") }}</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{# Delete User modal #}
+<div id="deleteUserModal" class="modal" onclick="closeModal('deleteUserModal')">
+    <div class="modal-content" onclick="event.stopPropagation()">
+        <span class="modal-close" onclick="closeModal('deleteUserModal')">&times;</span>
+        <h3>{{ t("delete_user") }}</h3>
+        <p id="deleteUserText">{{ t("confirm_delete_user") }}</p>
+        <form id="deleteUserForm" method="post">
+            <div class="form-actions" style="display:flex; gap:10px; justify-content:flex-end;">
+                <button type="button" class="btn" onclick="closeModal('deleteUserModal')">{{ t("cancel") }}</button>
+                <button type="submit" class="btn danger">{{ t("delete") }}</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{# Add User modal #}
+<div id="addUserModal" class="modal" onclick="closeModal('addUserModal')">
+    <div class="modal-content" onclick="event.stopPropagation()">
+        <span class="modal-close" role="button" aria-label="Close" onclick="closeModal('addUserModal')">&times;</span>
+        <h3 style="margin-top:0;">{{ t("add_user") }}</h3>
+
+        <form method="post" action="{{ url_for('users_add') }}" class="form">
+            <div class="form-group">
+                <label for="addUsername">{{ t("username") }}</label>
+                <input type="text" id="addUsername" name="username" required>
+            </div>
+
+            <div class="form-group">
+                <label for="addFirstName">{{ t("first_name") }}</label>
+                <input type="text" id="addFirstName" name="first_name">
+            </div>
+
+            <div class="form-group">
+                <label for="addLastName">{{ t("last_name") }}</label>
+                <input type="text" id="addLastName" name="last_name">
+            </div>
+
+            <div class="form-group">
+                <label for="addPassword">{{ t("password") }}</label>
+                <input type="password" id="addPassword" name="password" required>
+            </div>
+
+            <div class="form-group">
+                <label for="addRole">{{ t("role") }}</label>
+                <select name="role" id="addRole">
+                    <option value="user">{{ t("user") }}</option>
+                    <option value="admin">{{ t("admin") }}</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="addLanguage">{{ t("language") }}</label>
+                <select name="language" id="addLanguage">
+                    {% for code, label in langs|dictsort(by='value') %}
+                    <option value="{{ code }}" {% if code == 'en' %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>
+                    {{ t("password_needs_reset") }}
+                    <label class="toggle" for="addPasswordNeedsReset">
+                        <input type="checkbox" id="addPasswordNeedsReset" name="password_needs_reset" value="1" checked>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </label>
+            </div>
+
+            <div class="form-actions">
+                <button type="submit" class="btn primary">{{ t("add") }}</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+
+<script>
+    function openEditUser({ username, firstName, lastName, role, language, needsReset }) {
+        document.getElementById("editUsername").value = username;
+        document.getElementById("editFirstName").value = firstName || "";
+        document.getElementById("editLastName").value = lastName || "";
+        document.getElementById("editPassword").value = "";
+        document.getElementById("editRole").value = role || "user";
+        document.getElementById("editLanguage").value = language || "en";
+        document.getElementById("editPasswordNeedsReset").checked = needsReset === true || needsReset === "true";
+
+        document.getElementById("editUserForm").action = "/users/edit/" + encodeURIComponent(username);
+        openModal("editUserModal");
+    }
+
+    function openModal(id) {
+        document.getElementById(id).classList.add('active');
+        document.body.classList.add('modal-open');
+    }
+
+    function closeModal(id) {
+        document.getElementById(id).classList.remove("active");
+        document.body.classList.remove("modal-open");
+    }
+
+    function openDeleteUser(username) {
+        const text = confirmDeleteUserTemplate.replace("{username}", username);
+        document.getElementById("deleteUserText").textContent = text;
+        document.getElementById("deleteUserForm").action = "/users/delete/" + encodeURIComponent(username);
+        openModal("deleteUserModal");
+    }
+
+    const confirmDeleteUserTemplate = {{ t('confirm_delete_user', username='{username}')|tojson }};
+
+    document.querySelectorAll(".js-edit-user").forEach((button) => {
+        button.addEventListener("click", () => {
+            openEditUser({
+                username: button.dataset.username || "",
+                firstName: button.dataset.firstName || "",
+                lastName: button.dataset.lastName || "",
+                role: button.dataset.role || "user",
+                language: button.dataset.language || "en",
+                needsReset: button.dataset.needsReset || "false",
+            });
+        });
+    });
+
+    document.querySelectorAll(".js-delete-user").forEach((button) => {
+        button.addEventListener("click", () => {
+            openDeleteUser(button.dataset.username || "");
+        });
+    });
+</script>
+
+{% endblock %}

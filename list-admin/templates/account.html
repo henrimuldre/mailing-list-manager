@@ -1,0 +1,184 @@
+{% extends "layout_sidebar.html" %}
+{% block content %}
+<h2>{{ t("account_page_title") }}</h2>
+
+<div class="panel">
+    <h3>{{ t("account") }}</h3>
+
+    <form method="post" action="{{ url_for('account_post') }}" class="form">
+        <!-- Username (admin only) -->
+        <div class="form-group">
+            <label for="username">{{ t("username") }}</label>
+            <input type="text" name="username" value="{{ username }}" {% if g.role !='admin' %}readonly{% endif %}>
+        </div>
+
+        <!-- First / Last name -->
+        <div class="form-group">
+            <label for="first_name">{{ t("first_name") }}</label>
+            <input id="first_name" type="text" name="first_name" value="{{ first_name or '' }}"
+                autocomplete="given-name">
+        </div>
+
+        <div class="form-group">
+            <label for="last_name">{{ t("last_name") }}</label>
+            <input id="last_name" type="text" name="last_name" value="{{ last_name or '' }}" autocomplete="family-name">
+        </div>
+
+        <!-- New password -->
+        <div class="form-group">
+            <label for="password">{{ t("new_password") }}</label>
+            <input id="password" type="password" name="password" autocomplete="new-password">
+        </div>
+
+        <div class="form-actions">
+            <button type="submit" class="btn primary">{{ t("update") }}</button>
+        </div>
+    </form>
+</div>
+
+<div class="panel">
+    <h3>{{ t("appearance") }}</h3>
+
+    <form method="post" action="{{ url_for('account_post') }}" id="themeForm">
+        <div class="theme-grid">
+
+            {# Auto (system) #}
+            <label class="theme-card">
+                <input type="radio" name="theme" value="auto" {% if theme=="auto" %}checked{% endif %}>
+                <span class="card">
+                    <span class="title">
+                        <span>Auto</span>
+                        <small class="muted">{{ t("theme_system") }}</small>
+                    </span>
+                    <span class="swatches">
+                        <span class="dot" style="background:#f6f8fa;"></span>
+                        <span class="dot" style="background:#0d1117;"></span>
+                        <span class="dot" style="background:#0969da;"></span>
+                    </span>
+                </span>
+            </label>
+
+            {# Light #}
+            <label class="theme-card">
+                <input type="radio" name="theme" value="light" {% if theme=="light" %}checked{% endif %}>
+                <span class="card">
+                    <span class="title"><span>{{ t("theme_light") }}</span></span>
+                    <span class="swatches">
+                        <span class="dot" style="background:#f6f8fa;"></span>
+                        <span class="dot" style="background:#ffffff;"></span>
+                        <span class="dot" style="background:#0969da;"></span>
+                    </span>
+                </span>
+            </label>
+
+            {# Dark #}
+            <label class="theme-card">
+                <input type="radio" name="theme" value="dark" {% if theme=="dark" %}checked{% endif %}>
+                <span class="card">
+                    <span class="title"><span>{{ t("theme_dark") }}</span></span>
+                    <span class="swatches">
+                        <span class="dot" style="background:#111827;"></span>
+                        <span class="dot" style="background:#1f2937;"></span>
+                        <span class="dot" style="background:#60a5fa;"></span>
+                    </span>
+                </span>
+            </label>
+
+            {# Dracula #}
+            <label class="theme-card">
+                <input type="radio" name="theme" value="dracula" {% if theme=="dracula" %}checked{% endif %}>
+                <span class="card">
+                    <span class="title"><span>Dracula</span></span>
+                    <span class="swatches">
+                        <span class="dot" style="background:#1f2132;"></span>
+                        <span class="dot" style="background:#2b2d3f;"></span>
+                        <span class="dot" style="background:#ff92df;"></span>
+                    </span>
+                </span>
+            </label>
+
+            {# Nord #}
+            <label class="theme-card">
+                <input type="radio" name="theme" value="nord" {% if theme=="nord" %}checked{% endif %}>
+                <span class="card">
+                    <span class="title"><span>Nord</span></span>
+                    <span class="swatches">
+                        <span class="dot" style="background:#232a36;"></span>
+                        <span class="dot" style="background:#2f3644;"></span>
+                        <span class="dot" style="background:#8fbcbb;"></span>
+                    </span>
+                </span>
+            </label>
+
+            {# Catppuccin Mocha #}
+            <label class="theme-card">
+                <input type="radio" name="theme" value="catppuccin-mocha" {% if theme=="catppuccin-mocha" %}checked{%
+                    endif %}>
+                <span class="card">
+                    <span class="title"><span>Catppuccin Mocha</span></span>
+                    <span class="swatches">
+                        <span class="dot" style="background:#1c1d2a;"></span>
+                        <span class="dot" style="background:#242435;"></span>
+                        <span class="dot" style="background:#8dbbfa;"></span>
+                    </span>
+                </span>
+            </label>
+
+            {# Catppuccin Latte #}
+            <label class="theme-card">
+                <input type="radio" name="theme" value="catppuccin-latte" {% if theme=="catppuccin-latte" %}checked{%
+                    endif %}>
+                <span class="card">
+                    <span class="title"><span>Catppuccin Latte</span></span>
+                    <span class="swatches">
+                        <span class="dot" style="background:#f2f4fb;"></span>
+                        <span class="dot" style="background:#e7e9f3;"></span>
+                        <span class="dot" style="background:#2a6afc;"></span>
+                    </span>
+                </span>
+            </label>
+
+            {# Seashells Dark #}
+            <label class="theme-card">
+                <input type="radio" name="theme" value="seashells-dark" {% if theme=="seashells-dark" %}checked{% endif
+                    %}>
+                <span class="card">
+                    <span class="title"><span>Seashells Dark</span></span>
+                    <span class="swatches">
+                        <span class="dot" style="background:#101722;"></span>
+                        <span class="dot" style="background:#151f2d;"></span>
+                        <span class="dot" style="background:#2fb3c9;"></span>
+                    </span>
+                </span>
+            </label>
+
+            {# Moonlight II (VSCode) #}
+            <label class="theme-card">
+                <input type="radio" name="theme" value="moonlight_ii_vscode" {% if theme=="moonlight_ii_vscode" %}checked{% endif %}>
+                <span class="card">
+                    <span class="title"><span>Moonlight II</span><small class="muted">VSCode</small></span>
+                    <span class="swatches">
+                        <span class="dot" style="background:#1f2335;"></span>
+                        <span class="dot" style="background:#252a3f;"></span>
+                        <span class="dot" style="background:#82aaff;"></span>
+                    </span>
+                </span>
+            </label>
+
+        </div>
+
+        <p class="theme-note">{{ t("save_theme_note") }}</p>
+        <div class="form-actions">
+            <button type="submit" class="btn primary">{{ t("save_theme") }}</button>
+        </div>
+    </form>
+    <script>
+        document.querySelectorAll('input[name="theme"]').forEach((el) => {
+            el.addEventListener('change', () => {
+                // Live preview the theme; saving persists to DB
+                document.documentElement.setAttribute('data-theme', el.value);
+            });
+        });
+    </script>
+</div>
+{% endblock %}

@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="{{ g.language }}" data-theme="{{ g.theme }}">
+
+<head>
+    <meta charset="utf-8">
+    <title>{{ list_name }} — {{ t("app_title") }}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v={{ app_version }}">
+</head>
+
+<body>
+    <div class="layout">
+        <nav class="sidebar" id="sidebar">
+            <button class="sidebar-close" type="button" aria-label="Close menu" data-sidebar-toggle>
+                &times;
+            </button>
+            <h2>{{ t("app_title") }}</h2>
+
+            <form method="post" action="{{ url_for('set_list') }}" class="list-switcher">
+                <select name="list_id" onchange="this.form.submit()">
+                    {% for l in g.lists %}
+                    <option value="{{ l.id }}" {% if g.list_id==l.id %}selected{% endif %}>
+                        {{ l.name }}{% if not l.is_active %} {{ t('inactive_alt') }}{% endif %}
+                    </option>
+                    {% endfor %}
+                </select>
+            </form>
+
+            <div class="menu">
+                <a href="{{ url_for('dashboard') }}" class="{% if request.endpoint == 'dashboard' %}active{% endif %}">
+                    {{ t("dashboard") }}
+                </a>
+                <a href="{{ url_for('members') }}" class="{% if request.endpoint == 'members' %}active{% endif %}">
+                    {{ t("members") }}
+                </a>
+                <a href="{{ url_for('account') }}"
+                    class="{% if request.endpoint in ['account','account_post'] %}active{% endif %}">
+                    {{ t("account") }}
+                </a>
+                {% if g.role == 'admin' %}
+                <hr class="menu-sep">
+                <a href="{{ url_for('users') }}" class="{% if request.endpoint=='users' %}active{% endif %}">
+                    {{ t("users") }}
+                </a>
+                <a href="{{ url_for('config_page') }}" class="{% if request.endpoint == 'config_page' %}active{% endif %}">{{
+                    t("configuration") }}</a>
+                <a href="{{ url_for('logs_page') }}" class="{% if request.endpoint == 'logs_page' %}active{% endif %}">
+                    {{ t("logs") }}
+                </a>
+                {% endif %}
+            </div>
+
+            <div class="sidebar-footer">
+                <form method="post" action="{{ url_for('set_language') }}" class="lang-switch">
+                    {% set langs = t('languages') %}
+                    <select name="language" onchange="this.form.submit()">
+                        {% for code, label in langs|dictsort(by='value') %}
+                        <option value="{{ code }}" {% if g.language==code %}selected{% endif %}>
+                            {{ label }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </form>
+
+                <a href="{{ url_for('logout') }}" class="logout">{{ t("logout") }}</a>
+
+                <div class="sidebar-meta">
+                    {{ app_version }} &bull;
+                    <script>document.write(new Date().getFullYear())</script> {{ app_author }}
+                </div>
+            </div>
+        </nav>
+
+        <div class="sidebar-overlay" data-sidebar-overlay></div>
+
+
+        <div class="content">
+            <button class="sidebar-toggle" type="button" aria-label="Toggle menu" data-sidebar-toggle>
+                <span></span>
+                <span></span>
+                <span></span>
+            </button>
+            {% with msgs = get_flashed_messages(with_categories=true) %}
+            {% if msgs %}
+            <div class="flashwrap">
+                {% for cat, msg in msgs %}
+                <div class="flash {{ cat }}">{{ msg }}</div>
+                {% endfor %}
+            </div>
+            {% endif %}
+            {% endwith %}
+            {% block content %}
+            <!-- child pages (dashboard, members, settings) will go here -->
+            {% endblock %}
+        </div>
+    </div>
+    <script>
+        (function () {
+            const layout = document.querySelector('.layout');
+            const toggles = document.querySelectorAll('[data-sidebar-toggle]');
+            const overlay = document.querySelector('[data-sidebar-overlay]');
+            const sidebarLinks = document.querySelectorAll('.sidebar a');
+            const mq = window.matchMedia('(max-width: 960px)');
+
+            const openSidebar = () => {
+                layout.classList.add('sidebar-open');
+                document.body.classList.add('sidebar-open');
+            };
+
+            const closeSidebar = () => {
+                layout.classList.remove('sidebar-open');
+                document.body.classList.remove('sidebar-open');
+            };
+
+            toggles.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    if (layout.classList.contains('sidebar-open')) {
+                        closeSidebar();
+                    } else {
+                        openSidebar();
+                    }
+                });
+            });
+
+            if (overlay) {
+                overlay.addEventListener('click', closeSidebar);
+            }
+
+            sidebarLinks.forEach(link => {
+                link.addEventListener('click', () => {
+                    if (mq.matches) {
+                        closeSidebar();
+                    }
+                });
+            });
+
+            window.addEventListener('keydown', (event) => {
+                if (event.key === 'Escape') {
+                    closeSidebar();
+                }
+            });
+
+            const handleWidthChange = (event) => {
+                if (!event.matches) {
+                    closeSidebar();
+                }
+            };
+
+            if (mq.addEventListener) {
+                mq.addEventListener('change', handleWidthChange);
+            } else if (mq.addListener) {
+                mq.addListener(handleWidthChange);
+            }
+
+            handleWidthChange(mq);
+        })();
+    </script>
+</body>
+</html>

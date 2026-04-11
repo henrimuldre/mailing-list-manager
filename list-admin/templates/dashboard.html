@@ -1,0 +1,54 @@
+{% extends "layout_sidebar.html" %}
+{% block content %}
+<h2>{{ t("dashboard") }}</h2>
+
+<div class="row" style="margin-bottom:20px;">
+    <div class="stat-card stat-total">
+        <h3>{{ t("total_members") }}</h3>
+        <p>{{ total }}</p>
+    </div>
+    <div class="stat-card stat-active">
+        <h3>{{ t("active_members") }}</h3>
+        <p>{{ active }}</p>
+    </div>
+    <div class="stat-card stat-inactive">
+        <h3>{{ t("inactive_members") }}</h3>
+        <p>{{ inactive }}</p>
+    </div>
+</div>
+
+<h3>{{ t("signups") }}</h3>
+<canvas id="signupChart" width="600" height="200"></canvas>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js">
+</script>
+<script>
+    const ctx = document.getElementById('signupChart').getContext('2d');
+
+    // read --accent from CSS and build an rgba with ~0.8 alpha
+    const cs = getComputedStyle(document.documentElement);
+    let accent = cs.getPropertyValue('--accent').trim() || 'rgba(36, 86, 93, 0.8)';
+    let accentFill = accent;
+
+    if (accent.startsWith('rgb(')) {
+        // rgb(r,g,b) → rgba(r,g,b,0.8)
+        accentFill = accent.replace('rgb(', 'rgba(').replace(')', ', 0.8)');
+    }
+
+    new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: [{% for m, c in stats| reverse %}"{{ m.strftime('%b %Y') }}", {% endfor %}],
+        datasets: [{
+            label: '{{ t("signups") }}',
+            data: [{% for m, c in stats| reverse %}{{ c }}, {% endfor %}],
+        backgroundColor: accentFill
+      }]
+    },
+        options: {
+        responsive: true,
+        scales: { y: { beginAtZero: true } }
+    }
+  });
+</script>
+{% endblock %}

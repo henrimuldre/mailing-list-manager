@@ -1,0 +1,209 @@
+{% extends "layout_sidebar.html" %}
+{% block content %}
+<h2>{{ t("members") }}</h2>
+
+<div class="topbar">
+    <form method="get" class="row">
+        <input type="text" name="q" placeholder="{{ t('search') }}" value="{{ q|e }}">
+        <div class="form-group">
+            <label>{{ t("only_active") }}</label>
+            <label class="toggle">
+                <input type="checkbox" name="active" value="1" {% if only_active %}checked{% endif %}>
+                <span class="toggle-slider"></span>
+            </label>
+        </div>
+        <input type="hidden" name="active" value="0">
+        <input type="hidden" name="active" value="0">
+        <button type="submit">{{ t("filter") }}</button>
+    </form>
+    <div class="export-menu">
+        <a class="btn" href="{{ url_for('export_csv') }}">{{ t("export_csv") }}</a>
+        <a class="btn" href="{{ url_for('export_txt') }}">{{ t("export_txt") }}</a>
+        <button type="button" class="btn primary" onclick="openModal('addModal')">+ {{ t("add_member") }}</button>
+        <button type="button" class="btn" onclick="openModal('bulkModal')">{{ t("bulk_import") }}</button>
+    </div>
+</div>
+
+<div class="table-scroll">
+    <table>
+        <thead>
+            <tr>
+                {% set cols = {
+                "email": t("email"),
+                "display_name": t("name"),
+                "is_active": t("status"),
+                "created_at": t("created_at")
+                } %}
+                {% for col, label in cols.items() %}
+                {% set next_dir = 'asc' if sort != col or dir == 'desc' else 'desc' %}
+                <th class="{% if sort == col %}sorted {{ dir }}{% endif %}">
+                    <a
+                        href="{{ url_for('members', q=q, active=('1' if only_active else '0'), sort=col, dir=next_dir) }}">
+                        {{ label }}
+                    </a>
+                </th>
+                {% endfor %}
+                <th>{{ t("actions") }}</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for r in rows %}
+            <tr>
+                <td>{{ r.email }}</td>
+                <td>{{ r.display_name }}</td>
+                <td>
+                    {% if r.is_active %}
+                    <span class="pill ok">{{ t("active") }}</span>
+                    {% else %}
+                    <span class="pill off">{{ t("inactive") }}</span>
+                    {% endif %}
+                </td>
+                <td>{{ r.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
+                <td class="actions">
+                    <button type="button"
+                        onclick="openEditModal({{ r.id }}, '{{ r.email }}', '{{ r.display_name|e }}')">
+                        {{ t("edit") if t("edit") != "edit" else "Edit" }}
+                    </button>
+                    <form method="post" action="{{ url_for('toggle', member_id=r.id) }}">
+                        <button type="submit">
+                            {{ t("deactivate") if r.is_active else t("activate") }}
+                        </button>
+                    </form>
+                    <form method="post" action="{{ url_for('delete', member_id=r.id) }}"
+                        onsubmit="return confirm('Delete {{ r.email }}?')">
+                        <button type="button" class="danger" onclick="openDeleteModal({{ r.id }}, '{{ r.email }}')">{{
+                            t("delete") }}</button>
+                    </form>
+                </td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="4">{{ t("no_members_found") }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+{# Add Member modal #}
+<div id="addModal" class="modal" onclick="closeModal('addModal')">
+    <div class="modal-content" onclick="event.stopPropagation()">
+        <span class="modal-close" role="button" aria-label="Close" onclick="closeModal('addModal')">&times;</span>
+        <h3 style="margin-top:0;">{{ t("add_member") }}</h3>
+        <form method="post" action="{{ url_for('add') }}">
+            <div class="stack">
+                <input type="email" name="email" placeholder="{{ t('email') }}" required>
+                <input type="text" name="display_name" placeholder="{{ t('email') }} ({{ t('optional') }})">
+                <button type="submit" class="btn primary">{{ t("add") }}</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{# Bulk Import modal #}
+<div id="bulkModal" class="modal" onclick="closeModal('bulkModal')">
+    <div class="modal-content" onclick="event.stopPropagation()">
+        <span class="modal-close" role="button" aria-label="Close" onclick="closeModal('bulkModal')">&times;</span>
+        <h3 style="margin-top:0;">{{ t("bulk_import") }}</h3>
+        <form method="post" action="{{ url_for('bulk') }}" enctype="multipart/form-data">
+            <div class="stack">
+                <label>{{ t("mode") }}
+                    <select name="mode">
+                        <option value="add">{{ t("add_activate") }}</option>
+                        <option value="deactivate">{{ t("deactivate") }}</option>
+                        <option value="delete">{{ t("delete") }}</option>
+                    </select>
+                </label>
+
+                <label>{{ t("paste_emails") }}</label>
+                <textarea name="bulk_text" rows="6" placeholder="alice@example.com, Alice
+bob@example.org, Bob"></textarea>
+
+                <label>{{ t("upload_csv") }}</label>
+                <div class="file-row">
+                    <input id="csvfile" type="file" name="bulk_file" accept=".csv" hidden
+                        onchange="updateFileLabel(this)">
+                    <label for="csvfile" class="btn">{{ t("browse") }}</label>
+                    <span id="fileName" class="file-name">{{ t("no_file") }}</span>
+                </div>
+
+                <button type="submit" class="btn primary">{{ t("submit") }}</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{# Edit Member modal #}
+<div id="editModal" class="modal" onclick="closeModal('editModal')">
+    <div class="modal-content" onclick="event.stopPropagation()">
+        <span class="modal-close" onclick="closeModal('editModal')">&times;</span>
+        <h3>{{ t("edit_member") }}</h3>
+        <form id="editForm" method="post">
+            <div class="stack">
+                <input type="email" name="email" id="editEmail" placeholder="{{ t('email') }}" required>
+                <input type="text" name="display_name" id="editName" placeholder="{{ t('name') }}">
+                <button type="submit" class="btn primary">{{ t("save") if t("save") != "save" else "Save" }}</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{# Delete confirm modal #}
+<div id="deleteModal" class="modal" onclick="closeModal('deleteModal')">
+    <div class="modal-content" onclick="event.stopPropagation()">
+        <span class="modal-close" onclick="closeModal('deleteModal')">&times;</span>
+        <h3>{{ t("delete_member_title") }}</h3>
+        <p id="deleteText">{{ t("confirm_delete_email", email="") }}</p>
+        <form id="deleteForm" method="post">
+            <div class="stack">
+                <button type="submit" class="btn danger">{{ t("delete") }}</button>
+                <button type="button" class="btn" onclick="closeModal('deleteModal')">{{ t("cancel") }}</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+
+    function openModal(id) {
+        document.getElementById(id).classList.add('active');
+        document.body.classList.add('modal-open');
+    }
+    function closeModal(id) {
+        document.getElementById(id).classList.remove('active');
+        if (!document.querySelector('.modal.active')) {
+            document.body.classList.remove('modal-open');
+        }
+    }
+    function openDeleteModal(memberId, email) {
+        const form = document.getElementById('deleteForm');
+        form.action = `/delete/${memberId}`;
+        document.getElementById('deleteText').innerText = t_confirm_delete.replace("{email}", email);
+        openModal('deleteModal');
+    }
+
+    // Auto-close modals after successful server action
+    window.addEventListener('DOMContentLoaded', () => {
+        if (document.querySelector('.flash.success')) {
+            document.querySelectorAll('.modal').forEach(m => m.classList.remove('active'));
+            document.body.classList.remove('modal-open');
+        }
+    });
+
+    function openEditModal(id, email, name) {
+        const form = document.getElementById('editForm');
+        form.action = `/edit/${id}`;
+        document.getElementById('editEmail').value = email;
+        document.getElementById('editName').value = name || "";
+        openModal('editModal');
+    }
+
+    const t_confirm_delete = "{{ t('confirm_delete_email', email='{email}') }}";
+
+    function updateFileLabel(input) {
+        const el = document.getElementById('fileName');
+        el.textContent = input.files && input.files.length ? input.files[0].name : "{{ t('no_file') }}";
+    }
+</script>
+
+{% endblock %}

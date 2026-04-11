@@ -1,0 +1,137 @@
+{% extends "layout_sidebar.html" %}
+{% block content %}
+<h2>{{ t("config_page_title") }}</h2>
+
+<div class="panel">
+    <h2>{{ t("global_settings") }}</h2>
+    <form method="post" action="{{ url_for('config_globals_update') }}" class="form-vertical">
+        <label>
+            {{ t("idle_timeout") }}
+            <input type="number" name="IDLE_TIMEOUT_SECONDS" value="{{ globals.IDLE_TIMEOUT_SECONDS or 1800 }}">
+        </label>
+        <label>
+            {{ t("absolute_timeout") }}
+            <input type="number" name="ABSOLUTE_TIMEOUT_SECONDS"
+                value="{{ globals.ABSOLUTE_TIMEOUT_SECONDS or 43200 }}">
+        </label>
+        <label>
+            {{ t("max_seen_ids") }}
+            <input type="number" name="MAX_SEEN_IDS" value="{{ globals.MAX_SEEN_IDS or 500 }}">
+        </label>
+        <label>
+            {{ t("max_bytes") }}
+            {% set selected_max = globals.MAX_BYTES_MB or '10' %}
+            {% set choices = globals.MAX_BYTES_CHOICES %}
+            <select name="MAX_BYTES">
+                {% for opt in choices %}
+                <option value="{{ opt }}" {% if selected_max == opt %}selected{% endif %}>
+                    {% if opt == '0' %}0 {{ t("unlimited_alt") }}{% else %}{{ opt }} MB{% endif %}
+                </option>
+                {% endfor %}
+                {% if selected_max and selected_max not in choices %}
+                <option value="{{ selected_max }}" selected>{{ selected_max }} MB</option>
+                {% endif %}
+            </select>
+        </label>
+        <label>
+            {{ t("dangerous_ext") }}
+            <input type="text" name="DANGEROUS_EXT"
+                value="{{ globals.DANGEROUS_EXT or '.exe,.bat,.cmd,.scr,.js,.vbs,.ps1,.jar,.msi' }}">
+        </label>
+        <div class="form-actions">
+            <button type="submit" class="btn primary">{{ t("save") }}</button>
+        </div>
+    </form>
+</div>
+
+{% if list %}
+<div class="panel">
+    <h2>{{ t("list_settings") }} — {{ list.name }}</h2>
+    <form method="post" action="{{ url_for('config_list_update') }}" class="form-vertical">
+        <label>
+            {{ t("is_active") }}
+            <label class="toggle">
+                <input type="checkbox" name="is_active" value="1" {% if list.is_active %}checked{% endif %}>
+                <span class="toggle-slider"></span>
+            </label>
+        </label>
+        <label>
+            {{ t("name") }}
+            <input type="text" name="name" value="{{ list.name }}">
+        </label>
+        <label>
+            {{ t("address") }}
+            <input type="email" name="address" value="{{ list.address }}">
+        </label>
+        <label>
+            {{ t("subject_tag") }}
+            <input type="text" name="subject_tag" value="{{ list.subject_tag or '' }}">
+        </label>
+        <label>
+            {{ t("open_posting") }}
+            <label class="toggle">
+                <input type="checkbox" name="open_posting" value="1" {% if list.open_posting %}checked{% endif %}>
+                <span class="toggle-slider"></span>
+            </label>
+        </label>
+
+        <h3>IMAP</h3>
+        <label>
+            {{ t("imap_host") }}
+            <input type="text" name="imap_host" value="{{ list.imap_host or '' }}">
+        </label>
+        <label>
+            {{ t("imap_port") }}
+            <input type="number" name="imap_port" value="{{ list.imap_port or 993 }}">
+        </label>
+        <label>
+            {{ t("imap_user") }}
+            <input type="text" name="imap_user" value="{{ list.imap_user or '' }}">
+        </label>
+        <label>
+            {{ t("imap_pass") }}
+            <input
+                type="password"
+                name="imap_pass"
+                value=""
+                autocomplete="new-password"
+                placeholder="{{ t('leave_blank_keep_current') }}"
+            >
+        </label>
+        <label>
+            {{ t("imap_folder") }}
+            <input type="text" name="imap_folder" value="{{ list.imap_folder or default_imap_folder }}">
+        </label>
+
+        <h3>SMTP</h3>
+        <label>
+            {{ t("smtp_host") }}
+            <input type="text" name="smtp_host" value="{{ list.smtp_host or '' }}">
+        </label>
+        <label>
+            {{ t("smtp_port") }}
+            <input type="number" name="smtp_port" value="{{ list.smtp_port or 465 }}">
+        </label>
+        <label>
+            {{ t("smtp_user") }}
+            <input type="text" name="smtp_user" value="{{ list.smtp_user or '' }}">
+        </label>
+        <label>
+            {{ t("smtp_pass") }}
+            <input
+                type="password"
+                name="smtp_pass"
+                value=""
+                autocomplete="new-password"
+                placeholder="{{ t('leave_blank_keep_current') }}"
+            >
+        </label>
+
+        <div class="form-actions">
+            <button type="submit" class="btn primary">{{ t("save") }}</button>
+        </div>
+    </form>
+</div>
+{% endif %}
+
+{% endblock %}

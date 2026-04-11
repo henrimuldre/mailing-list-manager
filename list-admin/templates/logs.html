@@ -1,0 +1,28 @@
+{% extends "layout_sidebar.html" %}
+{% block content %}
+<h2>{{ t("logs") }}</h2>
+
+{% for section in log_sections %}
+<div class="panel log-panel">
+    <h3>{{ section.label }}</h3>
+
+    {% if section.error %}
+    <div class="flash error">{{ section.error }}</div>
+    {% elif not section.lines %}
+    <p class="log-empty">{{ t("log_empty") }}</p>
+    {% else %}
+    <pre class="log-output">{{ section.lines|join('') }}</pre>
+    {% endif %}
+
+    <div class="log-meta">
+        <small>{{ t("log_path_label") }}: <code>{{ section.path }}</code></small>
+    </div>
+</div>
+{% endfor %}
+
+<script>
+    document.querySelectorAll('.log-output').forEach(el => {
+        el.scrollTop = el.scrollHeight;
+    });
+</script>
+{% endblock %}
