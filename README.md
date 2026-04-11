@@ -38,7 +38,7 @@ The current deployment model uses:
 ### 1. Clone the repo
 
 ```bash
-git clone [https://github.com/leducksauce/mailing-list-manager](https://github.com/henrimuldre/mailing-list-manager)
+git clone https://github.com/henrimuldre/mailing-list-manager
 cd mailing-list-manager
 ```
 
