@@ -38,8 +38,8 @@ The current deployment model uses:
 ### 1. Clone the repo
 
 ```bash
-git clone <your-repo-url>
-cd list_app
+git clone https://github.com/leducksauce/mailing-list-manager
+cd mailing-list-manager
 ```
 
 ### 2. Create Python virtual environments
