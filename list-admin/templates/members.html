@@ -93,7 +93,7 @@
         <form method="post" action="{{ url_for('add') }}">
             <div class="stack">
                 <input type="email" name="email" placeholder="{{ t('email') }}" required>
-                <input type="text" name="display_name" placeholder="{{ t('email') }} ({{ t('optional') }})">
+                <input type="text" name="display_name" placeholder="{{ t('name') }} ({{ t('optional') }})">
                 <button type="submit" class="btn primary">{{ t("add") }}</button>
             </div>
         </form>
