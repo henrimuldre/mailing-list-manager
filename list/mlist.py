@@ -1,12 +1,8 @@
 #!/usr/bin/env python3
-import os, sys
+import os
 import copy
 import re
 from html.parser import HTMLParser
-
-sys.path.append(
-    ""
-)
 
 import time, json, logging, email, imaplib, smtplib, ssl, random, socket
 from logging.handlers import RotatingFileHandler
@@ -17,7 +13,7 @@ from email.header import decode_header, make_header
 from dotenv import load_dotenv
 
 # === Load environment (global settings) ===
-load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 DB = dict(
     host=os.getenv("DB_HOST", "localhost"),
