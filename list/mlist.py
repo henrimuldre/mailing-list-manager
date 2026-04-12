@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-import os
+import os, sys
+import copy
+import re
+from html.parser import HTMLParser
+
+sys.path.append(
+    ""
+)
 
 import time, json, logging, email, imaplib, smtplib, ssl, random, socket
 from logging.handlers import RotatingFileHandler
@@ -10,7 +17,7 @@ from email.header import decode_header, make_header
 from dotenv import load_dotenv
 
 # === Load environment (global settings) ===
-load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+load_dotenv()
 
 DB = dict(
     host=os.getenv("DB_HOST", "localhost"),
@@ -275,6 +282,165 @@ def clean_subject(subject, tag):
     return decoded
 
 
+def _address_domain(address):
+    local_part, separator, domain = (address or "").strip().rpartition("@")
+    if not separator or not local_part or not domain:
+        return None
+    return domain.lower()
+
+
+def _format_list_from(list_name, list_addr, original_from):
+    original_name, original_addr = email.utils.parseaddr(original_from or "")
+    original_label = " ".join((original_name or original_addr or "").split())
+    display_name = (
+        f"{original_label} via {list_name}" if original_label else list_name
+    )
+    return email.utils.formataddr((display_name, list_addr))
+
+
+def _format_list_id(list_name, list_addr):
+    identifier = (list_addr or "").strip().lower().replace("@", ".")
+    if not identifier:
+        identifier = "mailing-list.local"
+    return f"{list_name} <{identifier}>"
+
+
+class _HTMLToTextParser(HTMLParser):
+    _BLOCK_TAGS = {
+        "address",
+        "article",
+        "blockquote",
+        "br",
+        "div",
+        "footer",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "header",
+        "hr",
+        "li",
+        "ol",
+        "p",
+        "section",
+        "table",
+        "td",
+        "th",
+        "tr",
+        "ul",
+    }
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self._parts = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self._BLOCK_TAGS:
+            self._append_break()
+        if tag == "li":
+            self._parts.append("- ")
+
+    def handle_endtag(self, tag):
+        if tag in self._BLOCK_TAGS:
+            self._append_break()
+
+    def handle_data(self, data):
+        text = " ".join((data or "").split())
+        if not text:
+            return
+        if self._parts and not self._parts[-1].endswith(("\n", " ")):
+            self._parts.append(" ")
+        self._parts.append(text)
+
+    def get_text(self):
+        text = "".join(self._parts)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        return text.strip()
+
+    def _append_break(self):
+        if not self._parts:
+            return
+        if self._parts[-1].endswith("\n"):
+            if not self._parts[-1].endswith("\n\n"):
+                self._parts.append("\n")
+            return
+        self._parts.append("\n")
+
+
+def _html_to_plain_text(html_body):
+    parser = _HTMLToTextParser()
+    parser.feed(html_body or "")
+    parser.close()
+    return parser.get_text() or "(empty message)"
+
+
+def _decode_text_part(part):
+    charset = part.get_content_charset() or "utf-8"
+    payload = part.get_payload(decode=True)
+    if payload is None:
+        payload = part.get_payload()
+        return (payload or ""), charset
+    return payload.decode(charset, errors="replace"), charset
+
+
+def _copy_message_body(outbound, original_msg):
+    if (
+        not original_msg.is_multipart()
+        and original_msg.get_content_maintype() == "text"
+        and original_msg.get_content_subtype() == "html"
+    ):
+        html_body, charset = _decode_text_part(original_msg)
+        outbound.set_content(
+            _html_to_plain_text(html_body), subtype="plain", charset=charset
+        )
+        outbound.add_alternative(html_body, subtype="html", charset=charset)
+        return
+
+    for header_name, value in original_msg.items():
+        header_name_lower = header_name.lower()
+        if header_name == "MIME-Version" or header_name_lower.startswith("content-"):
+            outbound[header_name] = value
+
+    outbound.set_payload(copy.deepcopy(original_msg.get_payload()))
+    outbound.preamble = getattr(original_msg, "preamble", None)
+    outbound.epilogue = getattr(original_msg, "epilogue", None)
+
+
+def _build_outbound_message(original_msg, list_name, list_addr, new_subject, msgid):
+    outbound = EmailMessage()
+    original_from = original_msg.get("From", "")
+    original_reply_to = original_msg.get("Reply-To")
+    original_date = original_msg.get("Date")
+
+    outbound["From"] = _format_list_from(list_name, list_addr, original_from)
+    outbound["To"] = f"{list_name} <{list_addr}>"
+    outbound["Reply-To"] = list_addr
+    outbound["Sender"] = list_addr
+    outbound["Subject"] = new_subject
+    outbound["Date"] = email.utils.formatdate(localtime=True)
+    outbound["Message-ID"] = email.utils.make_msgid(domain=_address_domain(list_addr))
+    outbound["List-Id"] = _format_list_id(list_name, list_addr)
+    outbound["List-Post"] = f"<mailto:{list_addr}>"
+    outbound["Precedence"] = "list"
+    outbound["X-Original-From"] = original_from
+
+    if original_reply_to:
+        outbound["X-Original-Reply-To"] = original_reply_to
+    if original_date:
+        outbound["X-Original-Date"] = original_date
+    if msgid and not msgid.startswith("NO-MSGID:"):
+        outbound["X-Original-Message-ID"] = msgid
+
+    for header_name in ("In-Reply-To", "References"):
+        for value in original_msg.get_all(header_name, []):
+            outbound[header_name] = value
+
+    _copy_message_body(outbound, original_msg)
+    return outbound
+
+
 def _imap_backoff_seconds(state):
     """
     Backoff for IMAP failures to avoid hammering the provider.
@@ -443,8 +609,8 @@ def process_list(list_row, runtime_settings):
 
             # sender restrictions
             from_addr = email.utils.parseaddr(msg.get("From"))[1]
+            sender = (from_addr or "").strip().lower()
             if not open_posting:
-                sender = (from_addr or "").lower()
                 if sender not in member_set:
                     log.warning(
                         f"List {list_name}: unauthorized sender {from_addr}, skipping"
@@ -457,10 +623,6 @@ def process_list(list_row, runtime_settings):
             # subject tag (safe if Subject missing)
             subj = msg.get("Subject", "")
             new_subj = clean_subject(subj, subject_tag)
-            if "Subject" in msg:
-                msg.replace_header("Subject", new_subj)
-            else:
-                msg.add_header("Subject", new_subj)
 
             # attachment filtering
             safe = True
@@ -483,7 +645,9 @@ def process_list(list_row, runtime_settings):
             target_members = [
                 recipient
                 for recipient in target_members
-                if recipient and recipient.lower() in member_set
+                if recipient
+                and recipient.lower() in member_set
+                and recipient.lower() != sender
             ]
             if not target_members:
                 log.warning(
@@ -496,23 +660,10 @@ def process_list(list_row, runtime_settings):
 
             # forward
             try:
-                # force replies to the list (reply-to-list mode)
-                if "Reply-To" in msg:
-                    msg.replace_header("Reply-To", list_addr)
-                else:
-                    msg.add_header("Reply-To", list_addr)
-
-                # always show list in To
-                if "To" in msg:
-                    msg.replace_header("To", f"{list_name} <{list_addr}>")
-                else:
-                    msg.add_header("To", f"{list_name} <{list_addr}>")
-
-                # drop CC to avoid leaking addresses
-                if "Cc" in msg:
-                    del msg["Cc"]
-
-                refused = S.sendmail(list_addr, target_members, msg.as_string())
+                outbound_msg = _build_outbound_message(
+                    msg, list_name, list_addr, new_subj, msgid
+                )
+                refused = S.sendmail(list_addr, target_members, outbound_msg.as_string())
                 if refused:
                     pending_recipients[msgid] = list(refused.keys())
                     backoff = int(os.getenv("BACKOFF_MINUTES", 30)) * 60
