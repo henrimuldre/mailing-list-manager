@@ -2,6 +2,7 @@
 import os
 import copy
 import re
+import sys
 from html.parser import HTMLParser
 
 import time, json, logging, email, imaplib, smtplib, ssl, random, socket
@@ -14,6 +15,12 @@ from dotenv import load_dotenv
 
 # === Load environment (global settings) ===
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
+from shared.mail_credential_crypto import decrypt_mail_secret
 
 DB = dict(
     host=os.getenv("DB_HOST", "localhost"),
@@ -83,6 +90,31 @@ logging.basicConfig(
     ],
 )
 log = logging.getLogger("mlist")
+
+
+def _decrypt_list_mail_credentials(row):
+    data = dict(row)
+    list_label = data.get("address") or data.get("name") or data.get("id") or "list"
+    data["imap_pass"] = decrypt_mail_secret(
+        data.get("imap_pass"), field_name=f"IMAP password for {list_label}"
+    )
+    data["smtp_pass"] = decrypt_mail_secret(
+        data.get("smtp_pass"), field_name=f"SMTP password for {list_label}"
+    )
+    return data
+
+
+def _normalize_active_list_rows(rows):
+    prepared = []
+    for row in rows:
+        data = dict(row)
+        data.setdefault("imap_folder", DEFAULT_IMAP_FOLDER)
+        try:
+            prepared.append(_decrypt_list_mail_credentials(data))
+        except Exception as e:
+            list_label = data.get("name") or data.get("address") or data.get("id")
+            log.error(f"List {list_label}: {e}")
+    return prepared
 
 
 # === DB helpers ===
@@ -200,7 +232,7 @@ def load_active_lists():
                     WHERE is_active = TRUE
                 """
                 )
-                return cur.fetchall()
+                return _normalize_active_list_rows(cur.fetchall())
         except errors.UndefinedColumn:
             c.rollback()
             with c.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
@@ -214,10 +246,7 @@ def load_active_lists():
                     WHERE is_active = TRUE
                 """
                 )
-                rows = cur.fetchall()
-                for row in rows:
-                    row["imap_folder"] = DEFAULT_IMAP_FOLDER
-                return rows
+                return _normalize_active_list_rows(cur.fetchall())
 
 
 def load_members(list_id):
@@ -728,7 +757,11 @@ def process_list(list_row, runtime_settings):
 
 def main():
     runtime_settings = load_runtime_settings()
-    lists = load_active_lists()
+    try:
+        lists = load_active_lists()
+    except Exception as e:
+        log.error(f"Failed to load active mailing lists: {e}")
+        return
     if not lists:
         log.info("No active mailing lists found.")
         return

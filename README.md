@@ -19,6 +19,7 @@ The current deployment model uses:
 
 - The mailer runtime in [`list/mlist.py`](list/mlist.py)
 - The admin UI in [`list-admin/app.py`](list-admin/app.py)
+- The one-shot credential migration in [`scripts/migrate_mail_credentials.py`](scripts/migrate_mail_credentials.py)
 - A portable mailer launcher in [`list/run_mlist.sh`](list/run_mlist.sh)
 - A PM2 watchdog for the admin UI in [`list-admin/ensure-list-admin.sh`](list-admin/ensure-list-admin.sh)
 - A clean bootstrap schema in [`list-admin/sql/schema.sql`](list-admin/sql/schema.sql)
@@ -66,7 +67,34 @@ Important variables:
 
 - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASS`
 - `FLASK_SECRET` for the admin UI
+- `MAIL_CREDENTIALS_KEY` shared by `list/` and `list-admin/`
 - `LIST_ADMIN_HOST`, `LIST_ADMIN_PORT`
+
+Generate `MAIL_CREDENTIALS_KEY` with:
+
+```bash
+python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+Once `MAIL_CREDENTIALS_KEY` is set, newly saved IMAP/SMTP passwords are stored in the
+database as encrypted `enc:v1:...` values instead of raw text. Existing plaintext values
+remain readable for backward compatibility and will be encrypted the next time that list is
+saved through the admin UI.
+
+Fresh install vs upgrade:
+
+- Fresh install with a new database: no migration is needed. Set the same `MAIL_CREDENTIALS_KEY` in both `list/.env` and `list-admin/.env` before creating any lists.
+- Upgrade of an existing deployment with old plaintext credentials already in `mailing_lists`: run the migration once to convert those legacy rows.
+
+To migrate all existing plaintext credentials in one go:
+
+```bash
+list-admin/.venv/bin/python scripts/migrate_mail_credentials.py --dry-run
+list-admin/.venv/bin/python scripts/migrate_mail_credentials.py
+```
+
+The script auto-loads `list-admin/.env` and `list/.env`, skips rows already stored as
+`enc:v1:...`, and only updates rows that still contain legacy plaintext values.
 
 ### 4. Create the database schema
 

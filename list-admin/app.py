@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, os, csv, io, functools, json, glob, time
+import argparse, os, sys, csv, io, functools, json, glob, time
 from collections import deque
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from flask import (
@@ -23,6 +23,12 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import timedelta
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
+from shared.mail_credential_crypto import decrypt_mail_secret, encrypt_mail_secret
 
 # ==== App meta ====
 APP_VERSION = os.getenv("APP_VERSION")
@@ -141,6 +147,32 @@ def _read_log_tail(path=LOG_FILE_PATH, limit=LOG_TAIL_LINES):
 def _db_error_message(exc):
     diag = getattr(exc, "diag", None)
     return getattr(diag, "message_primary", None) or str(exc)
+
+
+def _decrypt_list_mail_credentials(row):
+    if not row:
+        return row
+
+    data = dict(row)
+    list_label = data.get("address") or data.get("name") or data.get("id") or "list"
+    data["imap_pass"] = decrypt_mail_secret(
+        data.get("imap_pass"), field_name=f"IMAP password for {list_label}"
+    )
+    data["smtp_pass"] = decrypt_mail_secret(
+        data.get("smtp_pass"), field_name=f"SMTP password for {list_label}"
+    )
+    return data
+
+
+def _encrypt_list_mail_credentials(payload):
+    data = dict(payload)
+    data["imap_pass"] = encrypt_mail_secret(
+        data.get("imap_pass"), field_name="IMAP password"
+    )
+    data["smtp_pass"] = encrypt_mail_secret(
+        data.get("smtp_pass"), field_name="SMTP password"
+    )
+    return data
 
 
 @app.context_processor
@@ -414,7 +446,7 @@ def fetch_list_settings(list_id):
             with c.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
                 cur.execute(query_with_folder, (list_id,))
                 row = cur.fetchone()
-                return dict(row) if row else None
+                return _decrypt_list_mail_credentials(row) if row else None
         except errors.UndefinedColumn:
             c.rollback()
             with c.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
@@ -422,7 +454,7 @@ def fetch_list_settings(list_id):
                 row = cur.fetchone()
                 if not row:
                     return None
-                data = dict(row)
+                data = _decrypt_list_mail_credentials(row)
                 data.setdefault("imap_folder", DEFAULT_IMAP_FOLDER)
                 return data
 
@@ -1443,7 +1475,7 @@ def lists_page():
 @requires_admin
 def lists_add():
     try:
-        payload = _normalize_new_list_form(request.form)
+        payload = _encrypt_list_mail_credentials(_normalize_new_list_form(request.form))
         with get_conn() as c, c.cursor() as cur:
             cur.execute(
                 """
@@ -1548,8 +1580,8 @@ def config_page():
                 # Never send stored mail credentials back to the browser.
                 list_settings["imap_pass"] = ""
                 list_settings["smtp_pass"] = ""
-        except Exception:
-            pass
+        except Exception as e:
+            flash(t("config_error", error=e), "error")
 
     return render_template(
         "config.html",
@@ -1634,6 +1666,11 @@ def config_list_update():
         smtp_pass = (
             smtp_pass_raw if smtp_pass_raw else current_settings.get("smtp_pass")
         )
+        encrypted_credentials = _encrypt_list_mail_credentials(
+            {"imap_pass": imap_pass, "smtp_pass": smtp_pass}
+        )
+        imap_pass = encrypted_credentials["imap_pass"]
+        smtp_pass = encrypted_credentials["smtp_pass"]
 
         with get_conn() as c:
             update_with_folder = """
