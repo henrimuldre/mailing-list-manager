@@ -19,7 +19,6 @@ logs/
 state/
 *.pid
 *.lock
-list/backoff_until.txt
 
 # Local editor / tooling
 .codex
