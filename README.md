@@ -54,6 +54,11 @@ list/.venv/bin/pip install -r list/requirements.txt
 list-admin/.venv/bin/pip install -r list-admin/requirements.txt
 ```
 
+If installing dependencies fails on `cryptography` on platforms without a compatible
+prebuilt wheel, such as some FreeBSD or shared-hosting environments, `pip` may fall back
+to building from source. In that case you may need Rust installed before rerunning the
+`pip install` commands.
+
 ### 3. Configure environment files
 
 ```bash
