@@ -6,7 +6,7 @@ Self-hosted mailing list software with two parts:
 - `list-admin/`: the web admin UI for managing lists, members, users, logs, and global settings
 
 This app was initially designed to be run in a limited-access shared webhost server, hence the usage of cron jobs, pm2 etc.
-If you have webserver that is not shared and you have root/full access, then there are of course better ways to run this app.
+If you have a webserver that is not shared and you have root/full access, then there are of course better ways to run this app.
 
 The current deployment model uses:
 
@@ -23,9 +23,7 @@ The current deployment model uses:
 - A portable mailer launcher in [`list/run_mlist.sh`](list/run_mlist.sh)
 - A PM2 watchdog for the admin UI in [`list-admin/ensure-list-admin.sh`](list-admin/ensure-list-admin.sh)
 - A clean bootstrap schema in [`list-admin/sql/schema.sql`](list-admin/sql/schema.sql)
-- [`.gitignore`](.gitignore)
-- [`list/.env.example`](list/.env.example)
-- [`list-admin/.env.example`](list-admin/.env.example)
+- Example environment files [`list/.env.example`](list/.env.example) and [`list-admin/.env.example`](list-admin/.env.example)
 
 ## Requirements
 
@@ -58,6 +56,28 @@ If installing dependencies fails on `cryptography` on platforms without a compat
 prebuilt wheel, such as some FreeBSD or shared-hosting environments, `pip` may fall back
 to building from source. In that case you may need Rust installed before rerunning the
 `pip install` commands.
+
+<details>
+<summary>Install Rust Only If <code>cryptography</code> Fails To Build</summary>
+
+If `pip install` fails while building `cryptography`, install Rust with the official
+`rustup` installer, reload your shell environment, and then rerun the dependency install:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+. "$HOME/.cargo/env"
+rustc --version
+cargo --version
+```
+
+Then retry:
+
+```bash
+list/.venv/bin/pip install -r list/requirements.txt
+list-admin/.venv/bin/pip install -r list-admin/requirements.txt
+```
+
+</details>
 
 ### 3. Configure environment files
 
@@ -190,6 +210,5 @@ Expose it through your web server and TLS setup, for example:
 
 ## Notes
 
-- The repository intentionally ignores real `.env` files and SQL dump exports.
 - The admin UI and mailer both rely on PostgreSQL as the shared source of truth.
 - The mailer reads per-list IMAP/SMTP settings from the database.
