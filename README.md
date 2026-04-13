@@ -58,7 +58,7 @@ to building from source. In that case you may need Rust installed before rerunni
 `pip install` commands.
 
 <details>
-<summary>Install Rust Only If <code>cryptography</code> Fails To Build</summary>
+<summary>Install Rust only if <code>cryptography</code> fails to build</summary>
 
 If `pip install` fails while building `cryptography`, install Rust with the official
 `rustup` installer, reload your shell environment, and then rerun the dependency install:
