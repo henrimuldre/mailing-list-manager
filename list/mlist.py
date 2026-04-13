@@ -506,21 +506,25 @@ def process_list(list_row, runtime_settings):
         return
 
     # Avoid long hangs on broken networks
-    socket.setdefaulttimeout(
-        _safe_positive_int(os.getenv("SOCKET_TIMEOUT_SECONDS"), 60)
+    socket_timeout = _safe_positive_int(
+        os.getenv("SOCKET_TIMEOUT_SECONDS"), 60
     )
+    socket.setdefaulttimeout(socket_timeout)
 
     M = None
     S = None
 
     try:
         # --- connect IMAP ---
+        folder = list_row.get("imap_folder") or DEFAULT_IMAP_FOLDER
+        imap_phase = "connect"
         try:
             M = imaplib.IMAP4_SSL(
                 list_row["imap_host"], int(list_row.get("imap_port", 993))
             )
+            imap_phase = "login"
             M.login(imap_user, imap_pass)
-            folder = list_row.get("imap_folder") or DEFAULT_IMAP_FOLDER
+            imap_phase = f"select folder '{folder}'"
             typ, _ = M.select(folder)
             if typ != "OK":
                 raise RuntimeError(f"IMAP select failed for folder '{folder}'")
@@ -534,6 +538,24 @@ def process_list(list_row, runtime_settings):
             if LOG_IMAP_CONNECTION_SUCCESS:
                 log.info(f"List {list_name}: Connection success")
 
+        except socket.timeout as e:
+            # IMPORTANT: close partial connection if login/select failed
+            try:
+                if M is not None:
+                    M.logout()
+            except Exception:
+                pass
+
+            delay = _imap_backoff_seconds(state)
+            state["backoff_until"] = time.time() + delay
+            save_state(list_id, state)
+
+            log.error(
+                f"List {list_name}: IMAP {imap_phase} timed out after "
+                f"{socket_timeout}s: {e} (backoff {delay}s)"
+            )
+            return
+
         except Exception as e:
             # IMPORTANT: close partial connection if login/select failed
             try:
@@ -546,7 +568,9 @@ def process_list(list_row, runtime_settings):
             state["backoff_until"] = time.time() + delay
             save_state(list_id, state)
 
-            log.error(f"List {list_name}: IMAP connect failed: {e} (backoff {delay}s)")
+            log.error(
+                f"List {list_name}: IMAP {imap_phase} failed: {e} (backoff {delay}s)"
+            )
             return
 
         typ, data = M.uid("search", None, "UNSEEN")

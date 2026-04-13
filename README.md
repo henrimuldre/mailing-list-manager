@@ -131,6 +131,10 @@ Example cron entries:
 0 */2 * * * /path/to/repo/list-admin/ensure-list-admin.sh
 ```
 
+`*/2` for `run_mlist.sh` is a reasonable production default if you want mail delivery to stay responsive.
+If you see occasional IMAP read timeouts but overall delivery is working, prefer increasing `SOCKET_TIMEOUT_SECONDS`
+in `list/.env` to `90` or `120` before slowing the cron interval down.
+
 Adjust the intervals to your needs.
 
 ## Reverse Proxy
