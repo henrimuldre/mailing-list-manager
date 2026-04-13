@@ -102,6 +102,11 @@ cd list-admin
 
 The watchdog script expects PM2 to be available in `PATH`.
 
+Useful watchdog tuning env vars:
+
+- `STARTUP_WAIT_SECONDS` to allow extra warm-up time before a fresh `pm2 start` or `pm2 restart` is treated as failed
+- `HEALTH_TIMEOUT`, `HEALTH_RETRIES`, `HEALTH_CHECK_INTERVAL` to tune the HTTP health probe behavior
+
 ### 6. Run the mailer
 
 Manual run:

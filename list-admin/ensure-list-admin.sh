@@ -50,6 +50,8 @@ export PATH="$VENV/bin:$HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin
 PM2_TIMEOUT=${PM2_TIMEOUT:-20}
 HEALTH_TIMEOUT=${HEALTH_TIMEOUT:-5}
 HEALTH_RETRIES=${HEALTH_RETRIES:-2}
+STARTUP_WAIT_SECONDS=${STARTUP_WAIT_SECONDS:-30}
+HEALTH_CHECK_INTERVAL=${HEALTH_CHECK_INTERVAL:-1}
 PM2_AUTO_UPDATE=${PM2_AUTO_UPDATE:-1}
 
 LOG_DIR="$APP_DIR/logs"
@@ -94,6 +96,22 @@ log_debug() {
 say() {
 	local msg="$*"
 	log_info "$msg"
+	if [[ -t 1 ]]; then
+		printf '%s\n' "$msg"
+	fi
+}
+
+say_warn() {
+	local msg="$*"
+	log_warn "$msg"
+	if [[ -t 1 ]]; then
+		printf '%s\n' "$msg"
+	fi
+}
+
+say_error() {
+	local msg="$*"
+	log_error "$msg"
 	if [[ -t 1 ]]; then
 		printf '%s\n' "$msg"
 	fi
@@ -305,6 +323,31 @@ health_ok() {
 	fi
 }
 
+wait_for_health() {
+	local wait_secs="${1:-$STARTUP_WAIT_SECONDS}"
+	local interval="${HEALTH_CHECK_INTERVAL:-1}"
+	local deadline=0
+
+	if health_ok; then
+		return 0
+	fi
+
+	[[ "$wait_secs" =~ ^[0-9]+$ ]] || wait_secs=30
+	[[ "$interval" =~ ^[0-9]+$ ]] || interval=1
+	((wait_secs > 0)) || return 1
+	((interval > 0)) || interval=1
+
+	deadline=$((SECONDS + wait_secs))
+	while ((SECONDS < deadline)); do
+		sleep "$interval"
+		if health_ok; then
+			return 0
+		fi
+	done
+
+	return 1
+}
+
 if [[ ! -x "$PY" ]]; then
 	say "!! Virtualenv Python not found at $PY"
 	log_error "venv Python not found at $PY"
@@ -343,11 +386,18 @@ if [[ -n "$PID" && "$PID" != "0" ]]; then
 		exit 0
 	fi
 
-	say "WARN: running but unhealthy; restarting…"
-	log_warn "Running (PID $PID) but unhealthy; restarting with pm2."
+	log_warn "Running (PID $PID) but not healthy yet; waiting up to ${STARTUP_WAIT_SECONDS}s before restart."
+	if wait_for_health; then
+		say "OK: process became healthy without restart."
+		log_info "Healthy (PID $PID) after startup grace period."
+		exit 0
+	fi
+
+	say_warn "WARN: running but unhealthy; restarting…"
+	log_warn "Running (PID $PID) still unhealthy after grace period; restarting with pm2."
 
 	if ! run_pm2 restart "$APP_NAME" --update-env; then
-		say "ERROR: pm2 restart failed."
+		say_error "ERROR: pm2 restart failed."
 		exit 1
 	fi
 	log_info "pm2 restart $APP_NAME succeeded"
@@ -356,14 +406,13 @@ if [[ -n "$PID" && "$PID" != "0" ]]; then
 		log_warn "pm2 save failed after restart"
 	fi
 
-	if health_ok; then
+	log_info "Waiting up to ${STARTUP_WAIT_SECONDS}s for health check after restart."
+	if wait_for_health; then
 		say "OK after restart."
-		log_info "OK after restart."
 		exit 0
 	fi
 
-	say "WARN: still not responding on $HEALTH_URL"
-	log_warn "Still not responding on $HEALTH_URL"
+	say_warn "WARN: still not responding on $HEALTH_URL"
 	log_error "Health check failed after restart"
 	exit 1
 fi
@@ -376,7 +425,7 @@ if ! run_pm2 start "$APP_DIR/app.py" \
 	--cwd "$APP_DIR" \
 	--interpreter "$PY" \
 	-- --no-debug --no-reload --no-debugger; then
-	say "ERROR: pm2 start failed."
+	say_error "ERROR: pm2 start failed."
 	exit 1
 fi
 log_info "pm2 start $APP_NAME succeeded"
@@ -385,13 +434,12 @@ if ! run_pm2 save; then
 	log_warn "pm2 save failed after start"
 fi
 
-if health_ok; then
+log_info "Waiting up to ${STARTUP_WAIT_SECONDS}s for health check after fresh start."
+if wait_for_health; then
 	say "OK: started and responding."
-	log_info "OK: started and responding."
 	exit 0
 fi
 
-say "WARN: started but not responding on $HEALTH_URL"
-log_warn "Started but not responding on $HEALTH_URL"
+say_warn "WARN: started but not responding on $HEALTH_URL"
 log_error "Health check failed after fresh start"
 exit 1

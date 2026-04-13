@@ -46,8 +46,9 @@
 
 {% if list %}
 <div class="panel">
-    <h2>{{ t("list_settings") }} — {{ list.name }}</h2>
+    <h2>{{ t("list_settings") }} - {{ list.name }}</h2>
     <form method="post" action="{{ url_for('config_list_update') }}" class="form-vertical">
+        <h3>{{ t("general_settings") }}</h3>
         <label>
             {{ t("is_active") }}
             <label class="toggle">
@@ -75,7 +76,7 @@
             </label>
         </label>
 
-        <h3>IMAP</h3>
+        <h3>{{ t("imap_settings") }}</h3>
         <label>
             {{ t("imap_host") }}
             <input type="text" name="imap_host" value="{{ list.imap_host or '' }}">
@@ -103,7 +104,7 @@
             <input type="text" name="imap_folder" value="{{ list.imap_folder or default_imap_folder }}">
         </label>
 
-        <h3>SMTP</h3>
+        <h3>{{ t("smtp_settings") }}</h3>
         <label>
             {{ t("smtp_host") }}
             <input type="text" name="smtp_host" value="{{ list.smtp_host or '' }}">
