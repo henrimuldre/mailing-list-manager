@@ -1,0 +1,190 @@
+{% extends "layout_sidebar.html" %}
+{% block content %}
+<h2>{{ t("lists") }}</h2>
+
+<div class="panel">
+    <div class="panel-header" style="display:flex; justify-content:space-between; align-items:center;">
+        <h3>{{ t("all_lists") }}</h3>
+        <button type="button" class="btn primary" onclick="openModal('addListModal')">
+            + {{ t("new_list") }}
+        </button>
+    </div>
+    <div class="table-scroll">
+        <table class="users-table lists-table">
+            <thead>
+                <tr>
+                    {% set cols = {
+                    "id": "ID",
+                    "name": t("name"),
+                    "address": t("address"),
+                    "is_active": t("is_active"),
+                    "subject_tag": t("subject_tag"),
+                    "open_posting": t("open_posting")
+                    } %}
+                    {% for col, label in cols.items() %}
+                    {% set next_dir = 'asc' if sort != col or dir == 'desc' else 'desc' %}
+                    <th class="{% if sort == col %}sorted {{ dir }}{% endif %}">
+                        <a href="{{ url_for('lists', sort=col, dir=next_dir) }}">
+                            {{ label }}
+                        </a>
+                    </th>
+                    {% endfor %}
+                    <th>{{ t("delete") }}</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in rows %}
+                <tr>
+                    <td>{{ row.id }}</td>
+                    <td>{{ row.name }}</td>
+                    <td>{{ row.address }}</td>
+                    <td>{{ t("yes") if row.is_active else t("no") }}</td>
+                    <td>{{ row.subject_tag or "" }}</td>
+                    <td>{{ t("yes") if row.open_posting else t("no") }}</td>
+                    <td>
+                        <button
+                            type="button"
+                            class="btn danger js-delete-list"
+                            data-list-id="{{ row.id }}"
+                            data-address="{{ row.address }}"
+                        >
+                            {{ t("delete") }}
+                        </button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div id="deleteListModal" class="modal" onclick="closeModal('deleteListModal')">
+    <div class="modal-content" onclick="event.stopPropagation()">
+        <span class="modal-close" onclick="closeModal('deleteListModal')">&times;</span>
+        <h3>{{ t("delete_list") }}</h3>
+        <p id="deleteListText">{{ t("confirm_delete_list", address="{address}") }}</p>
+        <form id="deleteListForm" method="post">
+            <div class="form-actions" style="display:flex; gap:10px; justify-content:flex-end;">
+                <button type="button" class="btn" onclick="closeModal('deleteListModal')">{{ t("cancel") }}</button>
+                <button type="submit" class="btn danger">{{ t("delete") }}</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div id="addListModal" class="modal" onclick="closeModal('addListModal')">
+    <div class="modal-content modal-content-wide" onclick="event.stopPropagation()">
+        <span class="modal-close" role="button" aria-label="Close" onclick="closeModal('addListModal')">&times;</span>
+        <h3 style="margin-top:0;">{{ t("add_list") }}</h3>
+        <p class="form-required-note"><span class="required-marker">*</span> {{ t("required") }}</p>
+
+        <form method="post" action="{{ url_for('lists_add') }}" class="form">
+            <div class="form-group">
+                <label for="addListName">{{ t("name") }} <span class="required-marker">*</span></label>
+                <input type="text" id="addListName" name="name" required>
+            </div>
+
+            <div class="form-group">
+                <label for="addListAddress">{{ t("address") }} <span class="required-marker">*</span></label>
+                <input type="email" id="addListAddress" name="address" required>
+            </div>
+
+            <div class="form-group">
+                <label for="addListSubjectTag">{{ t("subject_tag") }}</label>
+                <input type="text" id="addListSubjectTag" name="subject_tag">
+            </div>
+
+            <div class="form-group">
+                <label>
+                    {{ t("open_posting") }}
+                    <label class="toggle" for="addListOpenPosting">
+                        <input type="checkbox" name="open_posting" id="addListOpenPosting" value="1">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </label>
+            </div>
+
+            <h4 class="form-section-title">IMAP</h4>
+
+            <div class="form-group">
+                <label for="addListImapHost">{{ t("imap_host") }} <span class="required-marker">*</span></label>
+                <input type="text" id="addListImapHost" name="imap_host" required>
+            </div>
+
+            <div class="form-group">
+                <label for="addListImapPort">{{ t("imap_port") }} <span class="required-marker">*</span></label>
+                <input type="number" id="addListImapPort" name="imap_port" value="993" min="1" max="65535" required>
+            </div>
+
+            <div class="form-group">
+                <label for="addListImapUser">{{ t("imap_user") }} <span class="required-marker">*</span></label>
+                <input type="text" id="addListImapUser" name="imap_user" required>
+            </div>
+
+            <div class="form-group">
+                <label for="addListImapPass">{{ t("imap_pass") }} <span class="required-marker">*</span></label>
+                <input type="password" id="addListImapPass" name="imap_pass" autocomplete="new-password" required>
+            </div>
+
+            <div class="form-group">
+                <label for="addListImapFolder">{{ t("imap_folder") }} <span class="required-marker">*</span></label>
+                <input type="text" id="addListImapFolder" name="imap_folder" value="{{ default_imap_folder }}" required>
+            </div>
+
+            <h4 class="form-section-title">SMTP</h4>
+
+            <div class="form-group">
+                <label for="addListSmtpHost">{{ t("smtp_host") }} <span class="required-marker">*</span></label>
+                <input type="text" id="addListSmtpHost" name="smtp_host" required>
+            </div>
+
+            <div class="form-group">
+                <label for="addListSmtpPort">{{ t("smtp_port") }} <span class="required-marker">*</span></label>
+                <input type="number" id="addListSmtpPort" name="smtp_port" value="465" min="1" max="65535" required>
+            </div>
+
+            <div class="form-group">
+                <label for="addListSmtpUser">{{ t("smtp_user") }} <span class="required-marker">*</span></label>
+                <input type="text" id="addListSmtpUser" name="smtp_user" required>
+            </div>
+
+            <div class="form-group">
+                <label for="addListSmtpPass">{{ t("smtp_pass") }} <span class="required-marker">*</span></label>
+                <input type="password" id="addListSmtpPass" name="smtp_pass" autocomplete="new-password" required>
+            </div>
+
+            <div class="form-actions">
+                <button type="submit" class="btn primary">{{ t("add") }}</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+    function openModal(id) {
+        document.getElementById(id).classList.add("active");
+        document.body.classList.add("modal-open");
+    }
+
+    function closeModal(id) {
+        document.getElementById(id).classList.remove("active");
+        document.body.classList.remove("modal-open");
+    }
+
+    function openDeleteList(listId, address) {
+        const text = confirmDeleteListTemplate.replace("{address}", address);
+        document.getElementById("deleteListText").textContent = text;
+        document.getElementById("deleteListForm").action = "/lists/delete/" + encodeURIComponent(String(listId));
+        openModal("deleteListModal");
+    }
+
+    const confirmDeleteListTemplate = {{ t("confirm_delete_list", address="{address}")|tojson }};
+
+    document.querySelectorAll(".js-delete-list").forEach((button) => {
+        button.addEventListener("click", () => {
+            openDeleteList(button.dataset.listId || "", button.dataset.address || "");
+        });
+    });
+</script>
+
+{% endblock %}

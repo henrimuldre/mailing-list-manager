@@ -138,6 +138,11 @@ def _read_log_tail(path=LOG_FILE_PATH, limit=LOG_TAIL_LINES):
         return list(deque(fh, max(1, limit)))
 
 
+def _db_error_message(exc):
+    diag = getattr(exc, "diag", None)
+    return getattr(diag, "message_primary", None) or str(exc)
+
+
 @app.context_processor
 def inject_globals():
     # Fetch once per request
@@ -420,6 +425,92 @@ def fetch_list_settings(list_id):
                 data = dict(row)
                 data.setdefault("imap_folder", DEFAULT_IMAP_FOLDER)
                 return data
+
+
+def fetch_admin_mailing_lists(sort="id", direction="asc"):
+    """Fetch mailing lists for the admin table."""
+    sort_map = {
+        "id": "id",
+        "name": "LOWER(name)",
+        "address": "LOWER(address)",
+        "is_active": "is_active",
+        "subject_tag": "LOWER(COALESCE(subject_tag, ''))",
+        "open_posting": "open_posting",
+    }
+    order_by = sort_map.get(sort, "id")
+    order_dir = "DESC" if str(direction).lower() == "desc" else "ASC"
+
+    query = f"""
+        SELECT id,
+               name,
+               address,
+               is_active,
+               subject_tag,
+               open_posting
+        FROM mailing_lists
+        ORDER BY {order_by} {order_dir}, id ASC
+    """
+
+    with get_conn() as c, c.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+        cur.execute(query)
+        return cur.fetchall()
+
+
+def _normalize_new_list_form(form):
+    name = (form.get("name") or "").strip()
+    address_raw = (form.get("address") or "").strip()
+    subject_tag = (form.get("subject_tag") or "").strip() or None
+    open_posting = form.get("open_posting") == "1"
+
+    imap_host = (form.get("imap_host") or "").strip()
+    imap_port = _parse_tcp_port(form.get("imap_port") or 993, "IMAP port")
+    imap_user = (form.get("imap_user") or "").strip()
+    imap_pass = (form.get("imap_pass") or "").strip()
+    imap_folder = (form.get("imap_folder") or "").strip() or DEFAULT_IMAP_FOLDER
+
+    smtp_host = (form.get("smtp_host") or "").strip()
+    smtp_port = _parse_tcp_port(form.get("smtp_port") or 465, "SMTP port")
+    smtp_user = (form.get("smtp_user") or "").strip()
+    smtp_pass = (form.get("smtp_pass") or "").strip()
+
+    required_fields = []
+    for label, value in (
+        (t("name"), name),
+        (t("address"), address_raw),
+        (t("imap_host"), imap_host),
+        (t("imap_port"), imap_port),
+        (t("imap_user"), imap_user),
+        (t("imap_pass"), imap_pass),
+        (t("imap_folder"), imap_folder),
+        (t("smtp_host"), smtp_host),
+        (t("smtp_port"), smtp_port),
+        (t("smtp_user"), smtp_user),
+        (t("smtp_pass"), smtp_pass),
+    ):
+        if not value:
+            required_fields.append(label)
+
+    if required_fields:
+        raise RuntimeError(
+            t("required_fields_missing", fields=", ".join(required_fields))
+        )
+
+    return {
+        "name": name,
+        "address": valid_email(address_raw),
+        "is_active": True,
+        "subject_tag": subject_tag,
+        "open_posting": open_posting,
+        "imap_host": imap_host,
+        "imap_port": imap_port,
+        "imap_user": imap_user,
+        "imap_pass": imap_pass,
+        "imap_folder": imap_folder,
+        "smtp_host": smtp_host,
+        "smtp_port": smtp_port,
+        "smtp_user": smtp_user,
+        "smtp_pass": smtp_pass,
+    }
 
 
 # ==== Auth ====
@@ -1310,6 +1401,124 @@ def users_delete(username):
         flash(t("user_delete_error", error=e), "error")
 
     return redirect(url_for("users"))
+
+
+# ==== Lists (admin-only management) ====
+@app.get("/lists", endpoint="lists")
+@requires_login
+@requires_admin
+def lists_page():
+    sort = request.args.get("sort", "id")
+    direction = request.args.get("dir", "asc").lower()
+    allowed_sorts = {
+        "id",
+        "name",
+        "address",
+        "is_active",
+        "subject_tag",
+        "open_posting",
+    }
+    if sort not in allowed_sorts:
+        sort = "id"
+    if direction not in {"asc", "desc"}:
+        direction = "asc"
+
+    rows = []
+    try:
+        rows = fetch_admin_mailing_lists(sort=sort, direction=direction)
+    except Exception as e:
+        flash(t("list_load_error", error=_db_error_message(e)), "error")
+
+    return render_template(
+        "lists.html",
+        rows=rows,
+        sort=sort,
+        dir=direction,
+        default_imap_folder=DEFAULT_IMAP_FOLDER,
+    )
+
+
+@app.post("/lists/add")
+@requires_login
+@requires_admin
+def lists_add():
+    try:
+        payload = _normalize_new_list_form(request.form)
+        with get_conn() as c, c.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO mailing_lists (
+                    name,
+                    address,
+                    is_active,
+                    subject_tag,
+                    imap_user,
+                    imap_pass,
+                    smtp_user,
+                    smtp_pass,
+                    open_posting,
+                    imap_host,
+                    imap_port,
+                    smtp_host,
+                    smtp_port,
+                    imap_folder
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+                """,
+                (
+                    payload["name"],
+                    payload["address"],
+                    payload["is_active"],
+                    payload["subject_tag"],
+                    payload["imap_user"],
+                    payload["imap_pass"],
+                    payload["smtp_user"],
+                    payload["smtp_pass"],
+                    payload["open_posting"],
+                    payload["imap_host"],
+                    payload["imap_port"],
+                    payload["smtp_host"],
+                    payload["smtp_port"],
+                    payload["imap_folder"],
+                ),
+            )
+            row = cur.fetchone()
+            if row and not session.get("list_id"):
+                session["list_id"] = int(row[0])
+        flash(t("list_added", address=payload["address"]), "success")
+    except Exception as e:
+        flash(t("list_add_error", error=_db_error_message(e)), "error")
+
+    return redirect(url_for("lists"))
+
+
+@app.post("/lists/delete/<int:list_id>")
+@requires_login
+@requires_admin
+def lists_delete(list_id):
+    try:
+        with get_conn() as c, c.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(
+                "SELECT id, address FROM mailing_lists WHERE id=%s",
+                (list_id,),
+            )
+            target = cur.fetchone()
+            if not target:
+                flash(t("list_not_found"), "error")
+                return redirect(url_for("lists"))
+
+            cur.execute("DELETE FROM list_members WHERE list_id=%s", (list_id,))
+            cur.execute("DELETE FROM mailing_lists WHERE id=%s", (list_id,))
+
+        if str(session.get("list_id")) == str(list_id):
+            session.pop("list_id", None)
+
+        flash(t("list_deleted", address=target["address"]), "success")
+    except Exception as e:
+        flash(t("list_delete_error", error=_db_error_message(e)), "error")
+
+    return redirect(url_for("lists"))
 
 
 # ==== Config page ====

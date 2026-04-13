@@ -606,6 +606,11 @@ footer {
     overflow-wrap: anywhere
 }
 
+.modal-content-wide {
+    width: 680px;
+    max-width: min(94vw, 720px);
+}
+
 .modal-close {
     position: absolute;
     top: 10px;
@@ -674,6 +679,25 @@ body.modal-open {
 .form-actions {
     display: flex;
     margin-top: 10px;
+}
+
+.form-required-note {
+    margin: 0 0 12px;
+    font-size: 12px;
+    color: var(--muted);
+}
+
+.required-marker {
+    color: var(--danger);
+    font-weight: 700;
+}
+
+.form-section-title {
+    margin: 8px 0 0;
+    font-size: 14px;
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 4px;
 }
 
 .form-vertical {
@@ -958,6 +982,21 @@ textarea:focus-visible {
 .table-scroll table {
     width: 100%;
     min-width: 640px;
+}
+
+.lists-table {
+    min-width: 980px;
+}
+
+.lists-table th,
+.lists-table td {
+    width: 160px;
+    vertical-align: top;
+}
+
+.lists-table th:last-child,
+.lists-table td:last-child {
+    width: 120px;
 }
 
 @media (max-width: 960px) {

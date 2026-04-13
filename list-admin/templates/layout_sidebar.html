@@ -42,6 +42,9 @@
                 <a href="{{ url_for('users') }}" class="{% if request.endpoint=='users' %}active{% endif %}">
                     {{ t("users") }}
                 </a>
+                <a href="{{ url_for('lists') }}" class="{% if request.endpoint=='lists' %}active{% endif %}">
+                    {{ t("manage_lists") }}
+                </a>
                 <a href="{{ url_for('config_page') }}" class="{% if request.endpoint == 'config_page' %}active{% endif %}">{{
                     t("configuration") }}</a>
                 <a href="{{ url_for('logs_page') }}" class="{% if request.endpoint == 'logs_page' %}active{% endif %}">
