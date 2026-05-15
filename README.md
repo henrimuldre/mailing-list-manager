@@ -3,7 +3,7 @@
 Self-hosted mailing list software with two parts:
 
 - `list/`: the mailer that fetches messages from IMAP and redistributes them via SMTP
-- `list-admin/`: the web admin UI for managing lists, members, users, logs, and global settings
+- `list-admin/`: the web admin UI for managing lists, members, sent messages, users, logs, and global settings
 
 This app was initially designed to be run in a limited-access shared webhost server, hence the usage of cron jobs, pm2 etc.
 If you have a webserver that is not shared and you have root/full access, then there are of course better ways to run this app.

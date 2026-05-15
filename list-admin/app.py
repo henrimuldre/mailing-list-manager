@@ -874,6 +874,75 @@ def members():
     )
 
 
+# ==== Messages ====
+@app.get("/messages")
+@requires_login
+def messages():
+    sort = request.args.get("sort", "sent_at")
+    direction = request.args.get("dir", "desc").lower()
+    page = _safe_positive_int(request.args.get("page"), 1)
+    per_page_options = (25, 50, 100)
+    per_page = _safe_positive_int(request.args.get("per_page"), 25)
+    if per_page not in per_page_options:
+        per_page = 25
+
+    sort_map = {
+        "sent_at": "sent_at",
+        "from_address": "LOWER(from_address)",
+        "recipient_addresses": "LOWER(array_to_string(recipient_addresses, ', '))",
+        "subject": "LOWER(subject)",
+        "body": "LOWER(body)",
+    }
+    if sort not in sort_map:
+        sort = "sent_at"
+    if direction not in {"asc", "desc"}:
+        direction = "desc"
+
+    rows = []
+    total_messages = 0
+    total_pages = 1
+    try:
+        with get_conn() as c, c.cursor(
+            cursor_factory=psycopg2.extras.DictCursor
+        ) as cur:
+            cur.execute(
+                "SELECT COUNT(*) FROM message_deliveries WHERE list_id = %s",
+                (g.list_id,),
+            )
+            total_messages = cur.fetchone()[0]
+            total_pages = max(1, (total_messages + per_page - 1) // per_page)
+            page = min(page, total_pages)
+            offset = (page - 1) * per_page
+
+            cur.execute(
+                f"""
+                SELECT id, sent_at, from_address, recipient_addresses, subject, body
+                FROM message_deliveries
+                WHERE list_id = %s
+                ORDER BY {sort_map[sort]} {direction}, id DESC
+                LIMIT %s OFFSET %s
+                """,
+                (g.list_id, per_page, offset),
+            )
+            rows = cur.fetchall()
+    except (errors.UndefinedTable, errors.UndefinedColumn) as e:
+        flash(t("messages_table_missing", error=_db_error_message(e)), "error")
+    except Exception as e:
+        flash(t("messages_load_error", error=_db_error_message(e)), "error")
+
+    return render_template(
+        "messages.html",
+        rows=rows,
+        sort=sort,
+        dir=direction,
+        page=page,
+        per_page=per_page,
+        per_page_options=per_page_options,
+        total_messages=total_messages,
+        total_pages=total_pages,
+    )
+
+
 @app.post("/add")
 @requires_login
 def add():

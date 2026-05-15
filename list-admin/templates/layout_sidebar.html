@@ -33,6 +33,9 @@
                 <a href="{{ url_for('members') }}" class="{% if request.endpoint == 'members' %}active{% endif %}">
                     {{ t("members") }}
                 </a>
+                <a href="{{ url_for('messages') }}" class="{% if request.endpoint == 'messages' %}active{% endif %}">
+                    {{ t("messages") }}
+                </a>
                 <a href="{{ url_for('account') }}"
                     class="{% if request.endpoint in ['account','account_post'] %}active{% endif %}">
                     {{ t("account") }}

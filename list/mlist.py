@@ -31,6 +31,7 @@ DB = dict(
 )
 
 DEFAULT_MAX_BYTES = 10 * 1024 * 1024
+DEFAULT_MESSAGE_BODY_MAX_CHARS = 50000
 DEFAULT_IMAP_FOLDER = os.getenv(
     "DEFAULT_IMAP_FOLDER", os.getenv("IMAP_FOLDER", "INBOX")
 )
@@ -67,6 +68,9 @@ def _parse_ext_set(value):
 
 
 DEFAULT_MAX_SEEN_IDS = _safe_positive_int(os.getenv("MAX_SEEN_IDS"), 500)
+MESSAGE_BODY_MAX_CHARS = _safe_positive_int(
+    os.getenv("MESSAGE_BODY_MAX_CHARS"), DEFAULT_MESSAGE_BODY_MAX_CHARS
+)
 DEFAULT_DANGEROUS_EXT = _parse_ext_set(
     os.getenv("DANGEROUS_EXT", DANGEROUS_EXT_FALLBACK)
 ) or _parse_ext_set(DANGEROUS_EXT_FALLBACK)
@@ -122,7 +126,7 @@ def get_conn():
     return psycopg2.connect(**DB)
 
 
-_SCHEMA_FLAGS = {"imap_folder_checked": False}
+_SCHEMA_FLAGS = {"imap_folder_checked": False, "message_deliveries_missing": False}
 
 
 def ensure_imap_folder_column():
@@ -280,6 +284,7 @@ def load_state(list_id):
     state.setdefault("imap_fail_count", 0)
     state.setdefault("last_backoff_logged_until", 0)
     state.setdefault("pending_recipients", {})
+    state.setdefault("pending_delivery_logs", {})
     return state
 
 
@@ -435,6 +440,46 @@ def _decode_text_part(part):
         payload = part.get_payload()
         return (payload or ""), charset
     return payload.decode(charset, errors="replace"), charset
+
+
+def _normalize_body_text(value):
+    text = (value or "").replace("\r\n", "\n").replace("\r", "\n")
+    text = text.replace("\x00", "")
+    if len(text) > MESSAGE_BODY_MAX_CHARS:
+        text = text[:MESSAGE_BODY_MAX_CHARS].rstrip() + "\n[message truncated]"
+    return text
+
+
+def _is_body_text_part(part, subtype):
+    if part.is_multipart():
+        return False
+    if part.get_content_maintype() != "text":
+        return False
+    if part.get_content_subtype() != subtype:
+        return False
+    if part.get_filename():
+        return False
+    return part.get_content_disposition() != "attachment"
+
+
+def extract_message_body(original_msg):
+    plain_parts = []
+    html_parts = []
+
+    parts = original_msg.walk() if original_msg.is_multipart() else [original_msg]
+    for part in parts:
+        if _is_body_text_part(part, "plain"):
+            body, _ = _decode_text_part(part)
+            plain_parts.append(_normalize_body_text(body))
+        elif _is_body_text_part(part, "html"):
+            body, _ = _decode_text_part(part)
+            html_parts.append(_normalize_body_text(_html_to_plain_text(body)))
+
+    if plain_parts:
+        return _normalize_body_text("\n\n".join(part for part in plain_parts if part))
+    if html_parts:
+        return _normalize_body_text("\n\n".join(part for part in html_parts if part))
+    return ""
 
 
 def _safe_mime_token(value, default):
@@ -617,6 +662,7 @@ def _remember_seen_id(state, msgid, max_seen_ids):
         if len(seen_ids) > max_seen_ids:
             state["seen_ids"] = seen_ids[-max_seen_ids:]
     state.setdefault("pending_recipients", {}).pop(msgid, None)
+    state.setdefault("pending_delivery_logs", {}).pop(msgid, None)
 
 
 def _mark_seen(M, msg_uid, list_name, reason):
@@ -631,6 +677,56 @@ def _mark_seen(M, msg_uid, list_name, reason):
         return False
 
     return True
+
+
+def _delivery_log_payload(state, msgid, fallback_payload):
+    pending_logs = state.setdefault("pending_delivery_logs", {})
+    return pending_logs.get(msgid) or fallback_payload
+
+
+def _remember_delivery_log(state, msgid, payload):
+    state.setdefault("pending_delivery_logs", {})[msgid] = payload
+
+
+def record_message_delivery(list_id, list_addr, subject, body, from_addr, recipients):
+    if _SCHEMA_FLAGS["message_deliveries_missing"]:
+        return
+
+    recipients = [recipient for recipient in recipients if recipient]
+    if not recipients:
+        return
+
+    try:
+        with get_conn() as c, c.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO message_deliveries (
+                    list_id,
+                    mailing_list,
+                    subject,
+                    body,
+                    from_address,
+                    recipient_addresses
+                )
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    list_id,
+                    list_addr,
+                    subject or "",
+                    body or "",
+                    from_addr or "",
+                    recipients,
+                ),
+            )
+    except (errors.UndefinedTable, errors.UndefinedColumn):
+        _SCHEMA_FLAGS["message_deliveries_missing"] = True
+        log.warning(
+            "message_deliveries table or body column is missing; "
+            "successful messages are not being recorded"
+        )
+    except Exception as e:
+        log.error(f"Failed to record successful message delivery: {e}")
 
 
 def process_list(list_row, runtime_settings):
@@ -834,6 +930,17 @@ def process_list(list_row, runtime_settings):
                 save_state(list_id, state)
                 continue
 
+            delivery_payload = _delivery_log_payload(
+                state,
+                msgid,
+                {
+                    "subject": new_subj,
+                    "body": extract_message_body(msg),
+                    "from_addr": from_addr,
+                    "recipients": target_members,
+                },
+            )
+
             # forward
             try:
                 outbound_msg = _build_outbound_message(
@@ -842,6 +949,7 @@ def process_list(list_row, runtime_settings):
                 refused = S.sendmail(list_addr, target_members, outbound_msg.as_string())
                 if refused:
                     pending_recipients[msgid] = list(refused.keys())
+                    _remember_delivery_log(state, msgid, delivery_payload)
                     backoff = int(os.getenv("BACKOFF_MINUTES", 30)) * 60
                     state["backoff_until"] = time.time() + backoff
                     save_state(list_id, state)
@@ -852,6 +960,14 @@ def process_list(list_row, runtime_settings):
                     )
                     break
 
+                record_message_delivery(
+                    list_id,
+                    list_addr,
+                    delivery_payload.get("subject"),
+                    delivery_payload.get("body"),
+                    delivery_payload.get("from_addr"),
+                    delivery_payload.get("recipients") or target_members,
+                )
                 _remember_seen_id(state, msgid, max_seen_ids)
                 _mark_seen(M, msg_uid, list_name, msgid)
                 save_state(list_id, state)
@@ -860,6 +976,7 @@ def process_list(list_row, runtime_settings):
                 )
             except Exception as e:
                 pending_recipients[msgid] = target_members
+                _remember_delivery_log(state, msgid, delivery_payload)
                 log.error(f"List {list_name}: SMTP send failed: {e}")
                 backoff = int(os.getenv("BACKOFF_MINUTES", 30)) * 60
                 state["backoff_until"] = time.time() + backoff

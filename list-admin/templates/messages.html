@@ -1,0 +1,142 @@
+{% extends "layout_sidebar.html" %}
+{% block content %}
+<h2>{{ t("messages") }} ({{ total_messages }})</h2>
+
+<div class="panel">
+    <div class="table-scroll">
+        <table class="users-table messages-table">
+            <thead>
+                <tr>
+                    {% set cols = {
+                    "sent_at": t("date"),
+                    "from_address": t("from"),
+                    "recipient_addresses": t("to"),
+                    "subject": t("subject"),
+                    "body": t("message")
+                    } %}
+                    {% for col, label in cols.items() %}
+                    {% set next_dir = 'asc' if sort != col or dir == 'desc' else 'desc' %}
+                    <th class="{% if sort == col %}sorted {{ dir }}{% endif %}">
+                        <a href="{{ url_for('messages', sort=col, dir=next_dir, page=1, per_page=per_page) }}">
+                            {{ label }}
+                        </a>
+                    </th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for message in rows %}
+                {% set recipients = message.recipient_addresses or [] %}
+                {% set recipient_text = recipients|join(', ') %}
+                {% set body_text = message.body or "" %}
+                <tr>
+                    <td>{{ message.sent_at.strftime("%Y-%m-%d %H:%M") }}</td>
+                    <td class="truncate-cell" title="{{ message.from_address }}">{{ message.from_address }}</td>
+                    <td class="truncate-cell" title="{{ recipient_text }}">
+                        {% if recipients|length > 3 %}
+                        {{ recipients[:3]|join(', ') }} +{{ recipients|length - 3 }}
+                        {% else %}
+                        {{ recipient_text }}
+                        {% endif %}
+                    </td>
+                    <td class="truncate-cell" title="{{ message.subject }}">{{ message.subject }}</td>
+                    <td class="message-cell">
+                        <span class="message-preview" tabindex="0">{{ body_text }}</span>
+                        <template class="message-body-template">{{ body_text }}</template>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="5">{{ t("no_messages_found") }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <div class="pagination">
+        <form method="get" class="page-size-form">
+            <input type="hidden" name="sort" value="{{ sort }}">
+            <input type="hidden" name="dir" value="{{ dir }}">
+            <input type="hidden" name="page" value="1">
+            <label for="messagesPerPage">{{ t("per_page") }}</label>
+            <select id="messagesPerPage" name="per_page" onchange="this.form.submit()">
+                {% for option in per_page_options %}
+                <option value="{{ option }}" {% if per_page==option %}selected{% endif %}>{{ option }}</option>
+                {% endfor %}
+            </select>
+        </form>
+
+        <div class="pagination-controls">
+            {% if page > 1 %}
+            <a class="btn" href="{{ url_for('messages', sort=sort, dir=dir, page=page - 1, per_page=per_page) }}">{{
+                t("previous") }}</a>
+            {% else %}
+            <span class="btn disabled">{{ t("previous") }}</span>
+            {% endif %}
+
+            <span class="pagination-status">{{ t("page_of", page=page, total=total_pages) }}</span>
+
+            {% if page < total_pages %}
+            <a class="btn" href="{{ url_for('messages', sort=sort, dir=dir, page=page + 1, per_page=per_page) }}">{{
+                t("next") }}</a>
+            {% else %}
+            <span class="btn disabled">{{ t("next") }}</span>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<script>
+    (function () {
+        const tooltip = document.createElement('div');
+        tooltip.className = 'message-hover';
+        document.body.appendChild(tooltip);
+
+        function getMessageText(cell) {
+            const template = cell.querySelector('.message-body-template');
+            return template ? template.content.textContent || '' : '';
+        }
+
+        function positionTooltip(cell) {
+            const rect = cell.getBoundingClientRect();
+            const margin = 12;
+            const maxLeft = window.innerWidth - tooltip.offsetWidth - margin;
+            const left = Math.max(margin, Math.min(rect.left, maxLeft));
+            const below = rect.bottom + 8;
+            const above = rect.top - tooltip.offsetHeight - 8;
+            const top = below + tooltip.offsetHeight < window.innerHeight
+                ? below
+                : Math.max(margin, above);
+
+            tooltip.style.left = `${left}px`;
+            tooltip.style.top = `${top}px`;
+        }
+
+        function showTooltip(cell) {
+            const text = getMessageText(cell);
+            if (!text.trim()) {
+                return;
+            }
+            tooltip.textContent = text;
+            tooltip.style.display = 'block';
+            positionTooltip(cell);
+        }
+
+        function hideTooltip() {
+            tooltip.style.display = 'none';
+            tooltip.textContent = '';
+        }
+
+        document.querySelectorAll('.message-cell').forEach(cell => {
+            cell.addEventListener('mouseenter', () => showTooltip(cell));
+            cell.addEventListener('mouseleave', hideTooltip);
+            cell.addEventListener('focusin', () => showTooltip(cell));
+            cell.addEventListener('focusout', hideTooltip);
+        });
+
+        window.addEventListener('scroll', hideTooltip, true);
+        window.addEventListener('resize', hideTooltip);
+    })();
+</script>
+{% endblock %}
