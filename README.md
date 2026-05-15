@@ -192,17 +192,59 @@ in `list/.env` to `90` or `120` before slowing the cron interval down.
 
 Adjust the intervals to your needs.
 
-## Reverse Proxy
+## Web Access
 
-The admin UI is designed to bind to a local address and port, then sit behind a reverse proxy.
+The admin UI should not be exposed directly without TLS. Use one of these patterns,
+depending on what your host supports.
 
-Example target:
+### Option A: Reverse proxy on the same server
+
+Use this when your web server can proxy requests to a local Flask process.
+
+Example local Flask target (in the example, I used port 9010 configured in the .env file):
 
 - `127.0.0.1:9010`
 
-Expose it through your web server and TLS setup, for example:
+Expose that target through your web server and TLS setup, for example:
 
-- `https://your-domain.example`
+- `https://listadmin.example.com`
+
+If your Apache host supports per-directory proxy rules and has the required proxy/header
+modules enabled, you can create a small web directory for the admin UI proxy, point a
+subdomain such as `listadmin.example.com` to that directory, and place an `.htaccess` file
+like this there:
+
+```apache
+# BEGIN List Admin Proxy
+RewriteEngine On
+
+# Proxy everything to the local Flask app
+RewriteRule ^(.*)$ http://127.0.0.1:9010/$1 [P,L]
+
+# Rewrite backend redirects to your public HTTPS URL
+<IfModule mod_headers.c>
+    Header edit Location ^http://127\.0\.0\.1:9010/ https://listadmin.example.com/
+</IfModule>
+
+# Preserve original request context for the Flask app
+<IfModule mod_proxy.c>
+    RequestHeader set X-Forwarded-Proto "https"
+    RequestHeader set X-Forwarded-For %{REMOTE_ADDR}s
+</IfModule>
+# END List Admin Proxy
+```
+
+### Option B: Shared-host or managed-host port forwarding
+
+Use this when your host provides an internal app IP/port and a control panel for
+public port forwarding instead of a traditional reverse proxy.
+
+- bind the admin UI to the internal IP and port assigned by your host
+- configure the host's TCP/PM2/port-forwarding panel to forward public traffic to that internal target
+- keep TLS and external access controls configured at the host/web-server layer
+
+For either option, set `LIST_ADMIN_HOST` and `LIST_ADMIN_PORT` in `list-admin/.env`
+to the address and port the Flask process should bind to.
 
 ## To-do in the future
 
