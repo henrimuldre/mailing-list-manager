@@ -881,10 +881,10 @@ def messages():
     sort = request.args.get("sort", "sent_at")
     direction = request.args.get("dir", "desc").lower()
     page = _safe_positive_int(request.args.get("page"), 1)
-    per_page_options = (25, 50, 100)
-    per_page = _safe_positive_int(request.args.get("per_page"), 25)
+    per_page_options = (10, 25, 50, 100)
+    per_page = _safe_positive_int(request.args.get("per_page"), 10)
     if per_page not in per_page_options:
-        per_page = 25
+        per_page = 10
 
     sort_map = {
         "sent_at": "sent_at",
