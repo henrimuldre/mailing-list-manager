@@ -7,14 +7,24 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 DEFAULT_HOME="${HOME:-$SCRIPT_DIR}"
 HOME="${LIST_ADMIN_HOME:-$DEFAULT_HOME}"
 APP_DIR="${LIST_ADMIN_APP_DIR:-$SCRIPT_DIR}"
+
+cd "$APP_DIR"
+
+# Load .env before deriving runtime options such as HOST/PORT/VENV.
+# Keep .env values shell-compatible because this file is sourced by bash.
+if [[ -f "$APP_DIR/.env" ]]; then
+	set -a
+	# shellcheck disable=SC1090
+	source "$APP_DIR/.env"
+	set +a
+fi
+
 VENV="${LIST_ADMIN_VENV:-$APP_DIR/.venv}"
 APP_NAME="${LIST_ADMIN_APP_NAME:-list-admin}"
 PY="${LIST_ADMIN_PYTHON:-$VENV/bin/python}"
 HOST="${LIST_ADMIN_HOST:-127.0.0.1}"
 PORT="${LIST_ADMIN_PORT:-9010}"
 HEALTH_URL="${LIST_ADMIN_HEALTH_URL:-http://$HOST:$PORT/}"
-
-cd "$APP_DIR"
 
 LOG_ENABLE=1
 LOG_ALL=0
