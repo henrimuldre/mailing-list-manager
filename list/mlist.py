@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import os
-import copy
+import mimetypes
 import re
 import sys
 from html.parser import HTMLParser
@@ -302,9 +302,33 @@ def clean_subject(subject, tag):
         decoded = str(make_header(decode_header(subject)))
     except Exception:
         decoded = subject or ""
+    decoded = _sanitize_header_value(decoded) or ""
     if tag and not decoded.startswith(tag):
         return f"[{tag}] {decoded}"
     return decoded
+
+
+def _sanitize_header_value(value):
+    if value is None:
+        return None
+    return re.sub(r"[\r\n]+[ \t]*", " ", str(value)).strip()
+
+
+def _set_header(message, name, value):
+    sanitized = _sanitize_header_value(value)
+    if sanitized is not None:
+        try:
+            message[name] = sanitized
+        except ValueError:
+            message.replace_header(name, sanitized)
+
+
+def _sanitize_message_headers(message):
+    for part in message.walk():
+        for header_name, value in list(part.items()):
+            sanitized = _sanitize_header_value(value)
+            if sanitized != value:
+                part.replace_header(header_name, sanitized or "")
 
 
 def _address_domain(address):
@@ -315,7 +339,9 @@ def _address_domain(address):
 
 
 def _format_list_from(list_name, list_addr, original_from):
-    original_name, original_addr = email.utils.parseaddr(original_from or "")
+    original_name, original_addr = email.utils.parseaddr(
+        _sanitize_header_value(original_from) or ""
+    )
     original_label = " ".join((original_name or original_addr or "").split())
     display_name = (
         f"{original_label} via {list_name}" if original_label else list_name
@@ -327,7 +353,8 @@ def _format_list_id(list_name, list_addr):
     identifier = (list_addr or "").strip().lower().replace("@", ".")
     if not identifier:
         identifier = "mailing-list.local"
-    return f"{list_name} <{identifier}>"
+    safe_name = _sanitize_header_value(list_name) or "Mailing List"
+    return f"{safe_name} <{identifier}>"
 
 
 class _HTMLToTextParser(HTMLParser):
@@ -410,6 +437,102 @@ def _decode_text_part(part):
     return payload.decode(charset, errors="replace"), charset
 
 
+def _safe_mime_token(value, default):
+    value = (value or "").strip().lower()
+    if re.fullmatch(r"[a-z0-9!#$&^_.+-]+", value):
+        return value
+    return default
+
+
+def _content_type_for_part(part, filename):
+    guessed_type = mimetypes.guess_type(filename or "")[0]
+    if guessed_type and "/" in guessed_type:
+        return guessed_type.split("/", 1)
+
+    maintype = _safe_mime_token(part.get_content_maintype(), "application")
+    subtype = _safe_mime_token(part.get_content_subtype(), "octet-stream")
+    return maintype, subtype
+
+
+def _copy_content_metadata(target, source):
+    for header_name in ("Content-ID", "Content-Description"):
+        value = source.get(header_name)
+        if value:
+            _set_header(target, header_name, value)
+
+
+def _drop_header(message, name):
+    while name in message:
+        del message[name]
+
+
+def _attach_subpart(container, part):
+    _drop_header(part, "MIME-Version")
+    container.attach(part)
+
+
+def _populate_leaf_part(target, source):
+    filename = _sanitize_header_value(source.get_filename())
+    disposition = source.get_content_disposition()
+
+    if source.get_content_maintype() == "text" and not filename:
+        body, charset = _decode_text_part(source)
+        target.set_content(
+            body,
+            subtype=source.get_content_subtype() or "plain",
+            charset=charset,
+        )
+        if disposition:
+            target.add_header("Content-Disposition", disposition)
+        _copy_content_metadata(target, source)
+        return
+
+    payload = source.get_payload(decode=True)
+    if payload is None:
+        payload = str(source.get_payload() or "").encode("utf-8", errors="replace")
+
+    maintype, subtype = _content_type_for_part(source, filename)
+    target.set_content(
+        payload,
+        maintype=maintype,
+        subtype=subtype,
+        filename=filename,
+        disposition=disposition or "attachment",
+    )
+    _copy_content_metadata(target, source)
+
+
+def _make_multipart_container(target, subtype):
+    subtype = (subtype or "").lower()
+    if subtype == "alternative":
+        target.make_alternative()
+    elif subtype == "related":
+        target.make_related()
+    else:
+        target.make_mixed()
+
+
+def _clone_message_part(source):
+    target = EmailMessage()
+    if source.is_multipart():
+        _make_multipart_container(target, source.get_content_subtype())
+        target.preamble = getattr(source, "preamble", None)
+        target.epilogue = getattr(source, "epilogue", None)
+        for child in source.get_payload() or []:
+            _attach_subpart(target, _clone_message_part(child))
+    else:
+        _populate_leaf_part(target, source)
+    return target
+
+
+def _copy_multipart_body(outbound, original_msg):
+    _make_multipart_container(outbound, original_msg.get_content_subtype())
+    outbound.preamble = getattr(original_msg, "preamble", None)
+    outbound.epilogue = getattr(original_msg, "epilogue", None)
+    for part in original_msg.get_payload() or []:
+        _attach_subpart(outbound, _clone_message_part(part))
+
+
 def _copy_message_body(outbound, original_msg):
     if (
         not original_msg.is_multipart()
@@ -423,14 +546,12 @@ def _copy_message_body(outbound, original_msg):
         outbound.add_alternative(html_body, subtype="html", charset=charset)
         return
 
-    for header_name, value in original_msg.items():
-        header_name_lower = header_name.lower()
-        if header_name == "MIME-Version" or header_name_lower.startswith("content-"):
-            outbound[header_name] = value
-
-    outbound.set_payload(copy.deepcopy(original_msg.get_payload()))
-    outbound.preamble = getattr(original_msg, "preamble", None)
-    outbound.epilogue = getattr(original_msg, "epilogue", None)
+    if original_msg.is_multipart():
+        _copy_multipart_body(outbound, original_msg)
+    else:
+        _populate_leaf_part(outbound, original_msg)
+    _set_header(outbound, "MIME-Version", "1.0")
+    _sanitize_message_headers(outbound)
 
 
 def _build_outbound_message(original_msg, list_name, list_addr, new_subject, msgid):
@@ -439,28 +560,34 @@ def _build_outbound_message(original_msg, list_name, list_addr, new_subject, msg
     original_reply_to = original_msg.get("Reply-To")
     original_date = original_msg.get("Date")
 
-    outbound["From"] = _format_list_from(list_name, list_addr, original_from)
-    outbound["To"] = f"{list_name} <{list_addr}>"
-    outbound["Reply-To"] = list_addr
-    outbound["Sender"] = list_addr
-    outbound["Subject"] = new_subject
-    outbound["Date"] = email.utils.formatdate(localtime=True)
-    outbound["Message-ID"] = email.utils.make_msgid(domain=_address_domain(list_addr))
-    outbound["List-Id"] = _format_list_id(list_name, list_addr)
-    outbound["List-Post"] = f"<mailto:{list_addr}>"
-    outbound["Precedence"] = "list"
-    outbound["X-Original-From"] = original_from
+    _set_header(
+        outbound, "From", _format_list_from(list_name, list_addr, original_from)
+    )
+    _set_header(outbound, "To", f"{list_name} <{list_addr}>")
+    _set_header(outbound, "Reply-To", list_addr)
+    _set_header(outbound, "Sender", list_addr)
+    _set_header(outbound, "Subject", new_subject)
+    _set_header(outbound, "Date", email.utils.formatdate(localtime=True))
+    _set_header(
+        outbound,
+        "Message-ID",
+        email.utils.make_msgid(domain=_address_domain(list_addr)),
+    )
+    _set_header(outbound, "List-Id", _format_list_id(list_name, list_addr))
+    _set_header(outbound, "List-Post", f"<mailto:{list_addr}>")
+    _set_header(outbound, "Precedence", "list")
+    _set_header(outbound, "X-Original-From", original_from)
 
     if original_reply_to:
-        outbound["X-Original-Reply-To"] = original_reply_to
+        _set_header(outbound, "X-Original-Reply-To", original_reply_to)
     if original_date:
-        outbound["X-Original-Date"] = original_date
+        _set_header(outbound, "X-Original-Date", original_date)
     if msgid and not msgid.startswith("NO-MSGID:"):
-        outbound["X-Original-Message-ID"] = msgid
+        _set_header(outbound, "X-Original-Message-ID", msgid)
 
     for header_name in ("In-Reply-To", "References"):
         for value in original_msg.get_all(header_name, []):
-            outbound[header_name] = value
+            _set_header(outbound, header_name, value)
 
     _copy_message_body(outbound, original_msg)
     return outbound

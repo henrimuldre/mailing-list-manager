@@ -20,6 +20,7 @@ from psycopg2 import errors
 from email_validator import validate_email, EmailNotValidError
 from dotenv import load_dotenv
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.middleware.proxy_fix import ProxyFix
 from datetime import timedelta
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
@@ -57,6 +58,12 @@ def _load_flask_secret():
 
 # ==== Flask app ====
 app = Flask(__name__, static_folder="static", template_folder="templates")
+app.wsgi_app = ProxyFix(
+    app.wsgi_app,
+    x_for=1,
+    x_proto=1,
+    x_host=1,
+)
 app.secret_key = _load_flask_secret()
 app.config.update(
     SESSION_COOKIE_SECURE=True,      # only over HTTPS
