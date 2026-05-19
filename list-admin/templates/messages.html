@@ -29,18 +29,21 @@
                 {% set recipients = message.recipient_addresses or [] %}
                 {% set recipient_text = recipients|join(', ') %}
                 {% set body_text = message.body or "" %}
-                <tr>
+                <tr class="message-row" tabindex="0">
                     <td>{{ message.sent_at.strftime("%Y-%m-%d %H:%M") }}</td>
                     <td class="truncate-cell" title="{{ message.from_address }}">{{ message.from_address }}</td>
-                    <td class="truncate-cell" title="{{ recipient_text }}">
-                        {% if recipients|length > 3 %}
-                        {{ recipients[:3]|join(', ') }} +{{ recipients|length - 3 }}
-                        {% else %}
-                        {{ recipient_text }}
-                        {% endif %}
+                    <td class="truncate-cell recipient-cell" data-hover-template=".recipient-body-template">
+                        <span class="recipient-preview" tabindex="0">
+                            {% if recipients|length > 3 %}
+                            {{ recipients[:3]|join(', ') }} +{{ recipients|length - 3 }}
+                            {% else %}
+                            {{ recipient_text }}
+                            {% endif %}
+                        </span>
+                        <template class="recipient-body-template">{{ recipient_text }}</template>
                     </td>
                     <td class="truncate-cell" title="{{ message.subject }}">{{ message.subject }}</td>
-                    <td class="message-cell">
+                    <td class="message-cell" data-hover-template=".message-body-template">
                         <span class="message-preview" tabindex="0">{{ body_text }}</span>
                         <template class="message-body-template">{{ body_text }}</template>
                     </td>
@@ -87,14 +90,47 @@
     </div>
 </div>
 
+<div id="messageDetailsModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="messageDetailsTitle">
+    <div class="modal-content modal-content-wide message-details-modal" onclick="event.stopPropagation()">
+        <button type="button" class="modal-close" aria-label="Close" data-message-modal-close>&times;</button>
+        <h3 id="messageDetailsTitle">{{ t("message") }}</h3>
+        <dl class="message-details">
+            <div>
+                <dt>{{ t("date") }}</dt>
+                <dd data-message-detail="sent_at"></dd>
+            </div>
+            <div>
+                <dt>{{ t("from") }}</dt>
+                <dd data-message-detail="from_address"></dd>
+            </div>
+            <div>
+                <dt>{{ t("to") }}</dt>
+                <dd data-message-detail="recipient_addresses"></dd>
+            </div>
+            <div>
+                <dt>{{ t("subject") }}</dt>
+                <dd data-message-detail="subject"></dd>
+            </div>
+            <div class="message-details-body">
+                <dt>{{ t("message") }}</dt>
+                <dd data-message-detail="body"></dd>
+            </div>
+        </dl>
+    </div>
+</div>
+
 <script>
     (function () {
         const tooltip = document.createElement('div');
         tooltip.className = 'message-hover';
         document.body.appendChild(tooltip);
+        const detailsModal = document.getElementById('messageDetailsModal');
+        const detailFields = detailsModal
+            ? detailsModal.querySelectorAll('[data-message-detail]')
+            : [];
 
-        function getMessageText(cell) {
-            const template = cell.querySelector('.message-body-template');
+        function getTemplateText(container, selector) {
+            const template = container.querySelector(selector);
             return template ? template.content.textContent || '' : '';
         }
 
@@ -114,7 +150,7 @@
         }
 
         function showTooltip(cell) {
-            const text = getMessageText(cell);
+            const text = getTemplateText(cell, cell.dataset.hoverTemplate);
             if (!text.trim()) {
                 return;
             }
@@ -128,13 +164,78 @@
             tooltip.textContent = '';
         }
 
-        document.querySelectorAll('.message-cell').forEach(cell => {
+        document.querySelectorAll('[data-hover-template]').forEach(cell => {
             cell.addEventListener('mouseenter', () => showTooltip(cell));
             cell.addEventListener('mouseleave', hideTooltip);
             cell.addEventListener('focusin', () => showTooltip(cell));
             cell.addEventListener('focusout', hideTooltip);
         });
 
+        function getRowDetails(row) {
+            const cells = row.children;
+            return {
+                sent_at: cells[0] ? cells[0].textContent.trim() : '',
+                from_address: cells[1] ? cells[1].textContent.trim() : '',
+                recipient_addresses: getTemplateText(row, '.recipient-body-template').trim(),
+                subject: cells[3] ? cells[3].textContent.trim() : '',
+                body: getTemplateText(row, '.message-body-template')
+            };
+        }
+
+        function setDetail(name, value) {
+            const field = detailsModal.querySelector(`[data-message-detail="${name}"]`);
+            if (field) {
+                field.textContent = value || '';
+            }
+        }
+
+        function openDetailsModal(row) {
+            if (!detailsModal) {
+                return;
+            }
+            hideTooltip();
+            const details = getRowDetails(row);
+            detailFields.forEach(field => {
+                setDetail(field.dataset.messageDetail, details[field.dataset.messageDetail]);
+            });
+            detailsModal.classList.add('active');
+            document.body.classList.add('modal-open');
+            const closeButton = detailsModal.querySelector('[data-message-modal-close]');
+            if (closeButton) {
+                closeButton.focus();
+            }
+        }
+
+        function closeDetailsModal() {
+            if (!detailsModal) {
+                return;
+            }
+            detailsModal.classList.remove('active');
+            document.body.classList.remove('modal-open');
+        }
+
+        document.querySelectorAll('.message-row').forEach(row => {
+            row.addEventListener('click', () => openDetailsModal(row));
+            row.addEventListener('keydown', event => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    openDetailsModal(row);
+                }
+            });
+        });
+
+        if (detailsModal) {
+            detailsModal.addEventListener('click', closeDetailsModal);
+            detailsModal.querySelectorAll('[data-message-modal-close]').forEach(button => {
+                button.addEventListener('click', closeDetailsModal);
+            });
+        }
+
+        window.addEventListener('keydown', event => {
+            if (event.key === 'Escape' && detailsModal && detailsModal.classList.contains('active')) {
+                closeDetailsModal();
+            }
+        });
         window.addEventListener('scroll', hideTooltip, true);
         window.addEventListener('resize', hideTooltip);
     })();

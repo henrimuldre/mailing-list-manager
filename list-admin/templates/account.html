@@ -84,6 +84,46 @@
                 </span>
             </label>
 
+            {# High Contrast #}
+            <label class="theme-card">
+                <input type="radio" name="theme" value="high-contrast" {% if theme=="high-contrast" %}checked{% endif %}>
+                <span class="card">
+                    <span class="title"><span>{{ t("theme_high_contrast") }}</span></span>
+                    <span class="swatches">
+                        <span class="dot" style="background:#000000;"></span>
+                        <span class="dot" style="background:#ffffff;"></span>
+                        <span class="dot" style="background:#ffea00;"></span>
+                    </span>
+                </span>
+            </label>
+
+            {# Catppuccin Latte #}
+            <label class="theme-card">
+                <input type="radio" name="theme" value="catppuccin-latte" {% if theme=="catppuccin-latte" %}checked{%
+                    endif %}>
+                <span class="card">
+                    <span class="title"><span>Catppuccin Latte</span></span>
+                    <span class="swatches">
+                        <span class="dot" style="background:#f2f4fb;"></span>
+                        <span class="dot" style="background:#e7e9f3;"></span>
+                        <span class="dot" style="background:#2a6afc;"></span>
+                    </span>
+                </span>
+            </label>
+
+            {# Solarized Light #}
+            <label class="theme-card">
+                <input type="radio" name="theme" value="solarized-light" {% if theme=="solarized-light" %}checked{% endif %}>
+                <span class="card">
+                    <span class="title"><span>Solarized Light</span></span>
+                    <span class="swatches">
+                        <span class="dot" style="background:#fdf6e3;"></span>
+                        <span class="dot" style="background:#eee8d5;"></span>
+                        <span class="dot" style="background:#268bd2;"></span>
+                    </span>
+                </span>
+            </label>
+
             {# Dracula #}
             <label class="theme-card">
                 <input type="radio" name="theme" value="dracula" {% if theme=="dracula" %}checked{% endif %}>
@@ -120,20 +160,6 @@
                         <span class="dot" style="background:#1c1d2a;"></span>
                         <span class="dot" style="background:#242435;"></span>
                         <span class="dot" style="background:#8dbbfa;"></span>
-                    </span>
-                </span>
-            </label>
-
-            {# Catppuccin Latte #}
-            <label class="theme-card">
-                <input type="radio" name="theme" value="catppuccin-latte" {% if theme=="catppuccin-latte" %}checked{%
-                    endif %}>
-                <span class="card">
-                    <span class="title"><span>Catppuccin Latte</span></span>
-                    <span class="swatches">
-                        <span class="dot" style="background:#f2f4fb;"></span>
-                        <span class="dot" style="background:#e7e9f3;"></span>
-                        <span class="dot" style="background:#2a6afc;"></span>
                     </span>
                 </span>
             </label>
