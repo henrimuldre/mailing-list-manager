@@ -1,5 +1,21 @@
 #!/usr/bin/env python3
-import argparse, os, sys, csv, io, functools, json, glob, time
+import argparse, os, sys, csv, io, functools, json, glob, time, re
+
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+VENV_DIR = os.path.join(APP_DIR, ".venv")
+VENV_PYTHON = os.path.join(VENV_DIR, "bin", "python")
+
+# Ensure the app always runs from its own directory
+os.chdir(APP_DIR)
+
+# If list-admin/.venv exists but the app was started with another interpreter (for example a process manager defaulting to the system python), re-launch with the venv
+if os.path.isfile(VENV_PYTHON):
+    if os.path.abspath(sys.prefix) != os.path.abspath(VENV_DIR):
+        os.execv(
+            VENV_PYTHON,
+            [VENV_PYTHON, os.path.abspath(__file__)] + sys.argv[1:],
+        )
+
 from collections import deque
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from flask import (
@@ -23,7 +39,8 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
 from datetime import timedelta
 
-load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+# override=True: .env wins over inherited environment variables, so stale values saved by a process manager (e.g. PM2 keeps the env from when the app was first started) can't silently shadow later .env changes such as APP_VERSION
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=True)
 
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if BASE_DIR not in sys.path:
@@ -85,15 +102,25 @@ MB_FACTOR = Decimal(1024 * 1024)
 DEFAULT_IMAP_FOLDER = os.getenv(
     "DEFAULT_IMAP_FOLDER", os.getenv("IMAP_FOLDER", "INBOX")
 )
-LOG_FILE_PATH = os.getenv(
-    "MLIST_LOG_PATH",
-    os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "list", "logs", "mlist.log")),
+# Log paths may be given relative to the list-admin folder; always resolve them so the logs page shows full paths
+LOG_FILE_PATH = os.path.abspath(
+    os.path.join(APP_DIR, os.getenv("MLIST_LOG_PATH", os.path.join("..", "list", "logs", "mlist.log")))
 )
-ENSURE_LOG_FILE_PATH = os.getenv(
-    "ENSURE_LOG_PATH",
-    os.path.abspath(os.path.join(os.path.dirname(__file__), "logs", "ensure-list-admin.log")),
+# Only shown on the logs page when the file exists, i.e. when the optional ensure-list-admin.sh watchdog is used (hosts without a PM2 management panel)
+ENSURE_LOG_FILE_PATH = os.path.abspath(
+    os.path.join(APP_DIR, os.getenv("ENSURE_LOG_PATH", os.path.join("logs", "ensure-list-admin.log")))
+)
+PM2_LOG_DIR = os.path.abspath(
+    os.path.join(os.getenv("PM2_HOME", os.path.join(os.path.expanduser("~"), ".pm2")), "logs")
+)
+PM2_OUT_LOG_FILE_PATH = os.path.abspath(
+    os.path.join(APP_DIR, os.getenv("PM2_OUT_LOG_PATH", os.path.join(PM2_LOG_DIR, "list-admin-out.log")))
+)
+PM2_ERROR_LOG_FILE_PATH = os.path.abspath(
+    os.path.join(APP_DIR, os.getenv("PM2_ERROR_LOG_PATH", os.path.join(PM2_LOG_DIR, "list-admin-error.log")))
 )
 LOG_TAIL_LINES = int(os.getenv("MLIST_LOG_TAIL", "400"))
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 _SCHEMA_FLAGS = {
     "imap_folder_checked": False,
@@ -147,8 +174,26 @@ def _env_flag(name, default=False):
 
 
 def _read_log_tail(path=LOG_FILE_PATH, limit=LOG_TAIL_LINES):
-    with open(path, "r", encoding="utf-8", errors="replace") as fh:
-        return list(deque(fh, max(1, limit)))
+    # Read backwards from the end so large logs (pm2 logs can be tens of MB) are not scanned in full on every page load
+    limit = max(1, limit)
+    with open(path, "rb") as fh:
+        fh.seek(0, os.SEEK_END)
+        pos = fh.tell()
+        data = b""
+        while pos > 0 and data.count(b"\n") <= limit:
+            step = min(64 * 1024, pos)
+            pos -= step
+            fh.seek(pos)
+            data = fh.read(step) + data
+    # Normalize line endings the same way text-mode reading does
+    text = data.decode("utf-8", errors="replace")
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    lines = text.split("\n")
+    lines = [line + "\n" for line in lines[:-1]] + ([lines[-1]] if lines[-1] else [])
+    if pos > 0:
+        lines = lines[1:]  # first line may be cut off mid-way
+    # Strip terminal colour codes (for example from Flask/Werkzeug request logs)
+    return [_ANSI_ESCAPE_RE.sub("", line) for line in lines[-limit:]]
 
 
 def _db_error_message(exc):
@@ -1837,11 +1882,16 @@ def config_list_update():
 @requires_login
 @requires_admin
 def logs_page():
+    sources = [
+        ("mlist.log (mail processor)", LOG_FILE_PATH),
+        ("list-admin-out.log (pm2)", PM2_OUT_LOG_FILE_PATH),
+        ("list-admin-error.log (pm2)", PM2_ERROR_LOG_FILE_PATH),
+    ]
+    if os.path.isfile(ENSURE_LOG_FILE_PATH):
+        sources.append(("ensure-list-admin.log (watchdog)", ENSURE_LOG_FILE_PATH))
+
     sections = []
-    for label, path in (
-        ("mlist.log", LOG_FILE_PATH),
-        ("ensure-list-admin.log", ENSURE_LOG_FILE_PATH),
-    ):
+    for label, path in sources:
         try:
             lines = _read_log_tail(path=path)
             sections.append(dict(label=label, lines=lines, path=path, error=None))
@@ -1870,6 +1920,17 @@ def set_list():
 # ==== Run ====
 if __name__ == "__main__":
     server_options = _load_server_options()
+    # One line per start in the pm2 out log, to confirm which interpreter/venv and address the app actually started with.
+    print(
+        "STARTUP_PROOF "
+        f"pid={os.getpid()} "
+        f"python={sys.executable} "
+        f"prefix={sys.prefix} "
+        f"cwd={os.getcwd()} "
+        f"host={server_options.host} "
+        f"port={server_options.port}",
+        flush=True,
+    )
     app.run(
         host=server_options.host,
         port=server_options.port,

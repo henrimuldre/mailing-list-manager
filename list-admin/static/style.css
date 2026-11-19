@@ -169,6 +169,30 @@
     --shadow: 0 6px 18px rgba(0, 0, 0, 0.48)
 }
 
+/* Themed scrollbars - adapts to the active [data-theme] variables */
+* {
+    scrollbar-color: var(--border) var(--panel-2);
+    scrollbar-width: thin;
+}
+
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--panel-2);
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--muted);
+}
+
 .theme-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
@@ -415,7 +439,7 @@ table {
 }
 
 .messages-table {
-    min-width: 980px;
+    min-width: 860px;
 }
 
 .messages-table th,
@@ -519,6 +543,11 @@ table {
     max-height: 52vh;
     overflow: auto;
     line-height: 1.5;
+}
+
+.message-details [data-message-detail="recipient_addresses"] {
+    max-height: 6vh;
+    overflow: auto;
 }
 
 .page-size-form {

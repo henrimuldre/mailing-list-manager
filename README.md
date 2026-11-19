@@ -3,7 +3,7 @@
 Self-hosted mailing list software with two parts:
 
 - `list/`: the mailer that fetches messages from IMAP and redistributes them via SMTP
-- `list-admin/`: the web admin UI for managing lists, members, sent messages, users, logs, and global settings
+- `list-admin/`: the web admin UI for managing lists, members, sent messages, users, logs and global settings
 
 ![Mailing List Manager dashboard](list-admin/screenshots/2-Dashboard_dark.png)
 
@@ -14,8 +14,8 @@ The current deployment model uses:
 
 - Python 3
 - PostgreSQL
-- PM2 for keeping the admin UI process alive
-- cron for running the mailer and the PM2 watchdog
+- PM2 for keeping the admin UI process alive (either managed from your host's control panel or by yourself)
+- cron for running the mailer and an optional PM2 watchdog for hosts without a PM2 management panel
 
 ## What This Repository Contains
 
@@ -23,7 +23,8 @@ The current deployment model uses:
 - The admin UI in [`list-admin/app.py`](list-admin/app.py)
 - The one-shot credential migration in [`scripts/migrate_mail_credentials.py`](scripts/migrate_mail_credentials.py)
 - A portable mailer launcher in [`list/run_mlist.sh`](list/run_mlist.sh)
-- A PM2 watchdog for the admin UI in [`list-admin/ensure-list-admin.sh`](list-admin/ensure-list-admin.sh)
+- A PM2 process definition for the admin UI in [`list-admin/ecosystem.config.js`](list-admin/ecosystem.config.js)
+- An optional PM2 watchdog for the admin UI in [`list-admin/ensure-list-admin.sh`](list-admin/ensure-list-admin.sh), for hosts without a PM2 management panel
 - A clean bootstrap schema in [`list-admin/sql/schema.sql`](list-admin/sql/schema.sql)
 - Example environment files [`list/.env.example`](list/.env.example) and [`list-admin/.env.example`](list-admin/.env.example)
 
@@ -63,7 +64,7 @@ to building from source. In that case you may need Rust installed before rerunni
 <summary>Install Rust only if <code>cryptography</code> fails to build</summary>
 
 If `pip install` fails while building `cryptography`, install Rust with the official
-`rustup` installer, reload your shell environment, and then rerun the dependency install:
+`rustup` installer, reload your shell environment and then rerun the dependency install:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -121,7 +122,7 @@ list-admin/.venv/bin/python scripts/migrate_mail_credentials.py
 ```
 
 The script auto-loads `list-admin/.env` and `list/.env`, skips rows already stored as
-`enc:v1:...`, and only updates rows that still contain legacy plaintext values.
+`enc:v1:...` and only updates rows that still contain legacy plaintext values.
 
 ### 4. Create the database schema
 
@@ -148,14 +149,34 @@ cd list-admin
 .venv/bin/python app.py --host 127.0.0.1 --port 9010 --no-debug --no-reload --no-debugger
 ```
 
-PM2-managed run:
+PM2-managed run. Pick the option that matches your host:
+
+**Option A: your host manages PM2 apps from its control panel.** Add an app named `list-admin` in the panel
+with `list-admin/app.py` as the script, `list-admin/.venv/bin/python` as the interpreter and
+`--no-debug --no-reload --no-debugger` as arguments (or import [`list-admin/ecosystem.config.js`](list-admin/ecosystem.config.js)
+if the panel supports it). The host then keeps the process alive and no watchdog or cron entry is needed for the admin UI.
+
+**Option B: you manage PM2 yourself.** Start it with the included process definition:
+
+```bash
+cd list-admin
+pm2 start ecosystem.config.js
+```
+
+PM2 restarts the app if it crashes, but not if the PM2 daemon itself is stopped (for example after a server reboot
+on a shared host where you cannot use `pm2 startup`). For that case, use the watchdog, which checks the app over HTTP
+and starts or restarts it through PM2 when needed:
 
 ```bash
 cd list-admin
 ./ensure-list-admin.sh
 ```
 
-The watchdog script expects PM2 to be available in `PATH`.
+Run it from cron (see [Cron Setup](#cron-setup)). The watchdog script expects PM2 to be available in `PATH`
+and writes to `list-admin/logs/ensure-list-admin.log`, which then also appears on the admin UI's Logs page.
+
+Either way, if `list-admin/.venv` exists, `app.py` re-launches itself with that venv's Python when started with
+a different interpreter, so a panel that defaults to the system Python still works.
 
 Useful watchdog tuning env vars:
 
@@ -183,6 +204,7 @@ Example cron entries:
 
 ```cron
 */2 * * * * /path/to/repo/list/run_mlist.sh
+# Only if you manage PM2 yourself (Option B above):
 0 */2 * * * /path/to/repo/list-admin/ensure-list-admin.sh
 ```
 
@@ -211,7 +233,7 @@ Expose that target through your web server and TLS setup, for example:
 
 If your Apache host supports per-directory proxy rules and has the required proxy/header
 modules enabled, you can create a small web directory for the admin UI proxy, point a
-subdomain such as `listadmin.example.com` to that directory, and place an `.htaccess` file
+subdomain such as `listadmin.example.com` to that directory and place an `.htaccess` file
 like this there:
 
 ```apache
@@ -248,11 +270,11 @@ to the address and port the Flask process should bind to.
 
 ## To-do in the future
 
-- Add seed SQL or an installation script for `app_config`, `mailing_lists`, and the first admin user
-- Replace Flask’s built-in server with Gunicorn or another WSGI server for production
+- Add seed SQL or an installation script for `app_config`, `mailing_lists` and the first admin user
+- Replace Flask's built-in server with Gunicorn or another WSGI server for production
 - Add automated tests
 
 ## Notes
 
-- The admin UI and mailer both rely on PostgreSQL as the shared source of truth.
+- The admin UI and mailer both rely on PostgreSQL as the source database.
 - The mailer reads per-list IMAP/SMTP settings from the database.
