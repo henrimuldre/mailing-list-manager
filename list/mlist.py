@@ -76,6 +76,83 @@ DEFAULT_DANGEROUS_EXT = _parse_ext_set(
 ) or _parse_ext_set(DANGEROUS_EXT_FALLBACK)
 
 
+# === Sender authentication (closed lists) ===
+# The From header is trivial to forge, so on closed lists the sender is also checked against the SPF/DKIM/DMARC results that the receiving mail server records in Authentication-Results.
+#   off      only the From address is checked (old behaviour)
+#   log      (default) also check, but only log the result
+#   enforce  reject member mail that doesn't pass (or has no trusted result)
+# Switch to "enforce" once the log shows "pass" for your members' normal mail.
+# Both settings are read on every run, in this order: the admin UI's Configuration page
+# (app_config table), then list/.env, then the default (see load_runtime_settings).
+SENDER_AUTH_MODES = ("off", "log", "enforce")
+DEFAULT_SENDER_AUTH_MODE = "log"
+
+
+def _parse_sender_auth_mode(value):
+    mode = (value or "").strip().lower()
+    return mode if mode in SENDER_AUTH_MODES else None
+
+
+# authserv-id of your own mail server(s), i.e. the first word of the Authentication-Results header it adds, e.g. "mail.example.com".
+# Headers from anyone else are ignored, because a sender can put a fake Authentication-Results header in the message.
+# If empty, only the topmost header (added last and by the receiving server) is used.
+def _parse_authserv_ids(value):
+    return {part.strip().lower() for part in str(value or "").split(",") if part.strip()}
+
+_AUTH_METHOD_RE = re.compile(r"\s*(dmarc|dkim|spf)\s*=\s*([a-z]+)(.*)", re.I | re.S)
+_AUTH_PROP_RE = re.compile(
+    r"\b(header\.from|header\.d|header\.i|smtp\.mailfrom)\s*=\s*\"?([^\s;\"()]+)", re.I
+)
+
+
+def _domains_aligned(found, sender_domain):
+    """Relaxed alignment: same domain or one is a subdomain of the other."""
+    found = (found or "").lower().rsplit("@", 1)[-1].strip(".")
+    sender_domain = (sender_domain or "").lower().strip(".")
+    if not found or not sender_domain:
+        return False
+    return (
+        found == sender_domain
+        or found.endswith("." + sender_domain)
+        or sender_domain.endswith("." + found)
+    )
+
+
+def check_sender_authentication(msg, sender, trusted_authserv_ids=()):
+    """Return (verdict, detail). verdict is "pass", "fail" or "unknown" (no usable result)."""
+    sender_domain = sender.rsplit("@", 1)[-1] if "@" in sender else ""
+    headers = [" ".join(str(h).split()) for h in (msg.get_all("Authentication-Results") or [])]
+    if trusted_authserv_ids:
+        usable = [h for h in headers if h.split(";", 1)[0].strip().split(" ")[0].lower() in trusted_authserv_ids]
+    else:
+        usable = headers[:1]
+    if not usable:
+        return "unknown", "no Authentication-Results header from a trusted server"
+
+    results = []
+    for header in usable:
+        for clause in header.split(";")[1:]:
+            match = _AUTH_METHOD_RE.match(clause)
+            if not match:
+                continue
+            props = {k.lower(): v.lower() for k, v in _AUTH_PROP_RE.findall(match.group(3))}
+            results.append((match.group(1).lower(), match.group(2).lower(), props))
+    if not results:
+        return "unknown", "no dmarc/dkim/spf results in Authentication-Results"
+
+    summary = ", ".join(f"{method}={result}" for method, result, _ in results)
+    for method, result, props in results:
+        if result != "pass":
+            continue
+        if method == "dmarc" and _domains_aligned(props.get("header.from") or sender_domain, sender_domain):
+            return "pass", summary
+        if method == "dkim" and _domains_aligned(props.get("header.d") or props.get("header.i"), sender_domain):
+            return "pass", summary
+        if method == "spf" and _domains_aligned(props.get("smtp.mailfrom"), sender_domain):
+            return "pass", summary
+    return "fail", summary
+
+
 LOG_IMAP_CONNECTION_SUCCESS = False
 LOG_MAX_BYTES = _safe_positive_int(os.getenv("LOG_MAX_BYTES"), 5 * 1024 * 1024)
 LOG_BACKUP_COUNT = _safe_positive_int(os.getenv("LOG_BACKUP_COUNT"), 7)
@@ -169,13 +246,25 @@ def load_runtime_settings():
         "max_bytes_limit": DEFAULT_MAX_BYTES,
         "max_seen_ids": DEFAULT_MAX_SEEN_IDS,
         "dangerous_ext": set(DEFAULT_DANGEROUS_EXT),
+        # Fallbacks when the admin UI hasn't set them: list/.env, then the default
+        "sender_auth_mode": _parse_sender_auth_mode(os.getenv("SENDER_AUTH_MODE"))
+        or DEFAULT_SENDER_AUTH_MODE,
+        "trusted_authserv_ids": _parse_authserv_ids(os.getenv("TRUSTED_AUTHSERV_IDS")),
     }
 
     try:
         with get_conn() as c, c.cursor() as cur:
             cur.execute(
                 "SELECT key, value FROM app_config WHERE key = ANY(%s)",
-                (["MAX_BYTES", "MAX_SEEN_IDS", "DANGEROUS_EXT"],),
+                (
+                    [
+                        "MAX_BYTES",
+                        "MAX_SEEN_IDS",
+                        "DANGEROUS_EXT",
+                        "SENDER_AUTH_MODE",
+                        "TRUSTED_AUTHSERV_IDS",
+                    ],
+                ),
             )
             rows = {key: value for key, value in cur.fetchall()}
     except Exception as e:
@@ -217,6 +306,19 @@ def load_runtime_settings():
                 f"Invalid DANGEROUS_EXT value '{raw_dangerous_ext}', using default"
             )
 
+
+    # Set on the Configuration page; overrides list/.env. Missing row = not set there.
+    raw_auth_mode = rows.get("SENDER_AUTH_MODE")
+    if raw_auth_mode not in (None, ""):
+        mode = _parse_sender_auth_mode(raw_auth_mode)
+        if mode:
+            settings["sender_auth_mode"] = mode
+        else:
+            log.warning(f"Invalid SENDER_AUTH_MODE value '{raw_auth_mode}', ignoring it")
+
+    raw_authserv_ids = rows.get("TRUSTED_AUTHSERV_IDS")
+    if raw_authserv_ids not in (None, ""):
+        settings["trusted_authserv_ids"] = _parse_authserv_ids(raw_authserv_ids)
     return settings
 
 
@@ -308,9 +410,16 @@ def clean_subject(subject, tag):
     except Exception:
         decoded = subject or ""
     decoded = _sanitize_header_value(decoded) or ""
-    if tag and not decoded.startswith(tag):
-        return f"[{tag}] {decoded}"
-    return decoded
+    # The tag is stored without brackets; tolerate "[Book Club]" typed with them
+    tag = (tag or "").strip().strip("[]").strip()
+    if not tag:
+        return decoded
+    marker = f"[{tag}]"
+    # Already tagged anywhere, e.g. a reply "Re: [Book Club] Meeting": leave it, so a thread
+    # doesn't collect another tag with every reply
+    if marker.lower() in decoded.lower():
+        return decoded
+    return f"{marker} {decoded}".strip()
 
 
 def _sanitize_header_value(value):
@@ -737,6 +846,8 @@ def process_list(list_row, runtime_settings):
     max_bytes_limit = runtime_settings["max_bytes_limit"]
     max_seen_ids = runtime_settings["max_seen_ids"]
     dangerous_ext = runtime_settings["dangerous_ext"]
+    sender_auth_mode = runtime_settings["sender_auth_mode"]
+    trusted_authserv_ids = runtime_settings["trusted_authserv_ids"]
     imap_user = list_row["imap_user"]
     imap_pass = list_row["imap_pass"]
     smtp_user = list_row["smtp_user"]
@@ -771,8 +882,11 @@ def process_list(list_row, runtime_settings):
         folder = list_row.get("imap_folder") or DEFAULT_IMAP_FOLDER
         imap_phase = "connect"
         try:
+            # Explicit context: without it imaplib does NOT verify the server certificate or hostname, so anyone on the network path could read the IMAP password and mail
             M = imaplib.IMAP4_SSL(
-                list_row["imap_host"], int(list_row.get("imap_port", 993))
+                list_row["imap_host"],
+                int(list_row.get("imap_port", 993)),
+                ssl_context=ssl.create_default_context(),
             )
             imap_phase = "login"
             M.login(imap_user, imap_pass)
@@ -891,6 +1005,20 @@ def process_list(list_row, runtime_settings):
                     _mark_seen(M, msg_uid, list_name, msgid)
                     save_state(list_id, state)
                     continue
+                if sender_auth_mode != "off":
+                    verdict, detail = check_sender_authentication(msg, sender, trusted_authserv_ids)
+                    if verdict != "pass" and sender_auth_mode == "enforce":
+                        log.warning(
+                            f"List {list_name}: sender {from_addr} failed authentication "
+                            f"({verdict}: {detail}), possibly forged, skipping"
+                        )
+                        _remember_seen_id(state, msgid, max_seen_ids)
+                        _mark_seen(M, msg_uid, list_name, msgid)
+                        save_state(list_id, state)
+                        continue
+                    if sender_auth_mode == "log":
+                        note = "" if verdict == "pass" else " (would be rejected in enforce mode)"
+                        log.info(f"List {list_name}: sender auth for {from_addr}: {verdict} ({detail}){note}")
 
             # subject tag (safe if Subject missing)
             subj = msg.get("Subject", "")

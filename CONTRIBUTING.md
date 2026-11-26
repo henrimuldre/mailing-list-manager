@@ -46,7 +46,7 @@ There are no automated tests yet. Before you open a pull request, test on a deve
 1. The admin UI starts without errors and you can log in and log out.
 2. Pages you changed load in both light and dark theme and in every language without missing translation keys.
 3. Creating, editing and deleting lists and members still works, including duplicate member addresses.
-4. If you modified the mailer, run `list/run_mlist.sh` against a test list and check that a test message is fetched, redistributed and recorded on the Messages page, and that `list/logs/mlist.log` has no errors.
+4. If you modified the mailer, run `list/run_mlist.sh` against a test list and check that a test message is fetched, redistributed and recorded on the Messages page and that `list/logs/mlist.log` has no errors.
 5. If you modified the schema, apply `schema.sql` to an empty database and run your migration SQL against a copy of an existing database.
 6. If you modified `ensure-list-admin.sh` or `ecosystem.config.js`, test starting, restarting and recovering the admin UI through PM2.
 

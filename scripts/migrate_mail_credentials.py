@@ -10,6 +10,7 @@ if BASE_DIR not in sys.path:
 from shared.mail_credential_crypto import (
     encrypt_mail_secret,
     is_encrypted_mail_secret,
+    rotate_mail_secret,
 )
 
 
@@ -25,8 +26,15 @@ def load_default_env_files():
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description=(
-            "Encrypt legacy plaintext IMAP/SMTP passwords stored in mailing_lists."
+            "Encrypt legacy plaintext IMAP/SMTP passwords stored in mailing_lists. "
+            "With --rotate, also re-encrypt already encrypted ones with the current "
+            "MAIL_CREDENTIALS_KEY (old keys go in MAIL_CREDENTIALS_OLD_KEYS)."
         )
+    )
+    parser.add_argument(
+        "--rotate",
+        action="store_true",
+        help="Re-encrypt every stored password with the current key (key rotation).",
     )
     parser.add_argument(
         "--env-file",
@@ -73,7 +81,7 @@ def iter_target_rows(cur):
     return cur.fetchall()
 
 
-def plan_updates(rows):
+def plan_updates(rows, rotate=False):
     updates = []
     stats = {
         "rows_seen": 0,
@@ -82,6 +90,7 @@ def plan_updates(rows):
         "smtp_encrypted": 0,
         "rows_already_encrypted": 0,
         "rows_without_credentials": 0,
+        "values_rotated": 0,
     }
 
     for row in rows:
@@ -103,6 +112,19 @@ def plan_updates(rows):
                 smtp_pass, field_name=f"SMTP password for {row['address']}"
             )
             stats["smtp_encrypted"] += 1
+
+        if rotate:
+            for field, label in (("imap_pass", "IMAP"), ("smtp_pass", "SMTP")):
+                value = row[field]
+                if value not in (None, "") and is_encrypted_mail_secret(value):
+                    rotated = rotate_mail_secret(
+                        value, field_name=f"{label} password for {row['address']}"
+                    )
+                    if field == "imap_pass":
+                        new_imap_pass = rotated
+                    else:
+                        new_smtp_pass = rotated
+                    stats["values_rotated"] += 1
 
         if imap_pass in (None, "") and smtp_pass in (None, ""):
             stats["rows_without_credentials"] += 1
@@ -162,7 +184,7 @@ def main(argv=None):
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             rows = iter_target_rows(cur)
 
-        updates, stats = plan_updates(rows)
+        updates, stats = plan_updates(rows, rotate=args.rotate)
 
         print(f"Rows scanned: {stats['rows_seen']}")
         print(f"Rows needing update: {stats['rows_to_update']}")
@@ -170,6 +192,8 @@ def main(argv=None):
         print(f"SMTP passwords encrypted: {stats['smtp_encrypted']}")
         print(f"Rows already encrypted: {stats['rows_already_encrypted']}")
         print(f"Rows without credentials: {stats['rows_without_credentials']}")
+        if args.rotate:
+            print(f"Encrypted values re-encrypted with the current key: {stats['values_rotated']}")
 
         if updates:
             preview = ", ".join(

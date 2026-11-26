@@ -6,7 +6,8 @@ Only the latest release in this repository receives fixes.
 
 | Version | Supported |
 |---|---|
-| 1.2.0 | Yes |
+| 1.3.0 | Yes |
+| 1.2.0 | No |
 | Older | No |
 
 ## Reporting a vulnerability
@@ -45,7 +46,10 @@ Out of scope:
 ## Security design notes
 
 - Secrets (`DB_PASS`, `FLASK_SECRET`, `MAIL_CREDENTIALS_KEY`) are read from `.env` files, which are excluded from Git.
-- Admin UI passwords are stored as Werkzeug password hashes.
+- Admin UI passwords are stored as salted scrypt hashes (Werkzeug). Older hash formats are upgraded on the next login. New passwords need at least `MIN_PASSWORD_LENGTH` characters.
+- Logins are rate-limited per client IP and per username and failed logins are logged. Changing a password requires the current password and that user's other sessions will end.
+- All state-changing requests require a per-session CSRF token. Responses carry a Content-Security-Policy with per-request script tokens, `X-Frame-Options: DENY`, HSTS, `nosniff` and `Referrer-Policy`.
 - User, list, configuration and log pages require the `admin` role.
 - The session cookie is set with `Secure`, `HttpOnly` and `SameSite=Lax`, so the admin UI needs HTTPS in front of it.
-- IMAP and SMTP passwords are stored encrypted (`enc:v1:...`) with the Fernet key in `MAIL_CREDENTIALS_KEY`. Legacy plaintext values stay readable until they are migrated with `scripts/migrate_mail_credentials.py` or saved again through the admin UI.
+- IMAP and SMTP passwords are stored encrypted (`enc:v1:...`) with the Fernet key in `MAIL_CREDENTIALS_KEY`. Legacy plaintext values stay readable (with a logged warning) until they are migrated with `scripts/migrate_mail_credentials.py` or saved again through the admin UI. The key can be rotated with `MAIL_CREDENTIALS_OLD_KEYS` and `--rotate`.
+- The mailer verifies TLS certificates for IMAP and SMTP and can check SPF/DKIM/DMARC results for senders on closed lists (`SENDER_AUTH_MODE`).

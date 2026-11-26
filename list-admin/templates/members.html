@@ -19,8 +19,8 @@
     <div class="export-menu">
         <a class="btn" href="{{ url_for('export_csv') }}">{{ t("export_csv") }}</a>
         <a class="btn" href="{{ url_for('export_txt') }}">{{ t("export_txt") }}</a>
-        <button type="button" class="btn primary" onclick="openModal('addModal')">+ {{ t("add_member") }}</button>
-        <button type="button" class="btn" onclick="openModal('bulkModal')">{{ t("bulk_import") }}</button>
+        <button type="button" class="btn primary" data-open-modal="addModal">+ {{ t("add_member") }}</button>
+        <button type="button" class="btn" data-open-modal="bulkModal">{{ t("bulk_import") }}</button>
     </div>
 </div>
 
@@ -60,18 +60,19 @@
                 </td>
                 <td>{{ r.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
                 <td class="actions">
-                    <button type="button"
-                        onclick="openEditModal({{ r.id }}, '{{ r.email }}', '{{ r.display_name|e }}')">
+                    <button type="button" class="js-edit-member" data-member-id="{{ r.id }}"
+                        data-email="{{ r.email }}" data-name="{{ r.display_name or '' }}">
                         {{ t("edit") if t("edit") != "edit" else "Edit" }}
                     </button>
                     <form method="post" action="{{ url_for('toggle', member_id=r.id) }}">
+            {{ csrf_field() }}
                         <button type="submit">
                             {{ t("deactivate") if r.is_active else t("activate") }}
                         </button>
                     </form>
-                    <form method="post" action="{{ url_for('delete', member_id=r.id) }}"
-                        onsubmit="return confirm('Delete {{ r.email }}?')">
-                        <button type="button" class="danger" onclick="openDeleteModal({{ r.id }}, '{{ r.email }}')">{{
+                    <form method="post" action="{{ url_for('delete', member_id=r.id) }}">
+            {{ csrf_field() }}
+                        <button type="button" class="danger js-delete-member" data-member-id="{{ r.id }}" data-email="{{ r.email }}">{{
                             t("delete") }}</button>
                     </form>
                 </td>
@@ -86,11 +87,12 @@
 </div>
 
 {# Add Member modal #}
-<div id="addModal" class="modal" onclick="closeModal('addModal')">
-    <div class="modal-content" onclick="event.stopPropagation()">
-        <span class="modal-close" role="button" aria-label="Close" onclick="closeModal('addModal')">&times;</span>
+<div id="addModal" class="modal" data-close-modal="addModal">
+    <div class="modal-content" data-stop-propagation>
+        <span class="modal-close" role="button" aria-label="Close" data-close-modal="addModal">&times;</span>
         <h3 style="margin-top:0;">{{ t("add_member") }}</h3>
         <form method="post" action="{{ url_for('add') }}">
+            {{ csrf_field() }}
             <div class="stack">
                 <input type="email" name="email" placeholder="{{ t('email') }}" required>
                 <input type="text" name="display_name" placeholder="{{ t('name') }} ({{ t('optional') }})">
@@ -101,11 +103,12 @@
 </div>
 
 {# Bulk Import modal #}
-<div id="bulkModal" class="modal" onclick="closeModal('bulkModal')">
-    <div class="modal-content" onclick="event.stopPropagation()">
-        <span class="modal-close" role="button" aria-label="Close" onclick="closeModal('bulkModal')">&times;</span>
+<div id="bulkModal" class="modal" data-close-modal="bulkModal">
+    <div class="modal-content" data-stop-propagation>
+        <span class="modal-close" role="button" aria-label="Close" data-close-modal="bulkModal">&times;</span>
         <h3 style="margin-top:0;">{{ t("bulk_import") }}</h3>
         <form method="post" action="{{ url_for('bulk') }}" enctype="multipart/form-data">
+            {{ csrf_field() }}
             <div class="stack">
                 <label>{{ t("mode") }}
                     <select name="mode">
@@ -122,7 +125,7 @@ bob@example.org, Bob"></textarea>
                 <label>{{ t("upload_csv") }}</label>
                 <div class="file-row">
                     <input id="csvfile" type="file" name="bulk_file" accept=".csv" hidden
-                        onchange="updateFileLabel(this)">
+                        data-file-label="fileName">
                     <label for="csvfile" class="btn">{{ t("browse") }}</label>
                     <span id="fileName" class="file-name">{{ t("no_file") }}</span>
                 </div>
@@ -134,11 +137,12 @@ bob@example.org, Bob"></textarea>
 </div>
 
 {# Edit Member modal #}
-<div id="editModal" class="modal" onclick="closeModal('editModal')">
-    <div class="modal-content" onclick="event.stopPropagation()">
-        <span class="modal-close" onclick="closeModal('editModal')">&times;</span>
+<div id="editModal" class="modal" data-close-modal="editModal">
+    <div class="modal-content" data-stop-propagation>
+        <span class="modal-close" data-close-modal="editModal">&times;</span>
         <h3>{{ t("edit_member") }}</h3>
         <form id="editForm" method="post">
+            {{ csrf_field() }}
             <div class="stack">
                 <input type="email" name="email" id="editEmail" placeholder="{{ t('email') }}" required>
                 <input type="text" name="display_name" id="editName" placeholder="{{ t('name') }}">
@@ -149,21 +153,22 @@ bob@example.org, Bob"></textarea>
 </div>
 
 {# Delete confirm modal #}
-<div id="deleteModal" class="modal" onclick="closeModal('deleteModal')">
-    <div class="modal-content" onclick="event.stopPropagation()">
-        <span class="modal-close" onclick="closeModal('deleteModal')">&times;</span>
+<div id="deleteModal" class="modal" data-close-modal="deleteModal">
+    <div class="modal-content" data-stop-propagation>
+        <span class="modal-close" data-close-modal="deleteModal">&times;</span>
         <h3>{{ t("delete_member_title") }}</h3>
         <p id="deleteText">{{ t("confirm_delete_email", email="") }}</p>
         <form id="deleteForm" method="post">
+            {{ csrf_field() }}
             <div class="stack">
                 <button type="submit" class="btn danger">{{ t("delete") }}</button>
-                <button type="button" class="btn" onclick="closeModal('deleteModal')">{{ t("cancel") }}</button>
+                <button type="button" class="btn" data-close-modal="deleteModal">{{ t("cancel") }}</button>
             </div>
         </form>
     </div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce() }}">
 
     function openModal(id) {
         document.getElementById(id).classList.add('active');
@@ -198,12 +203,27 @@ bob@example.org, Bob"></textarea>
         openModal('editModal');
     }
 
-    const t_confirm_delete = "{{ t('confirm_delete_email', email='{email}') }}";
+    const t_confirm_delete = {{ t('confirm_delete_email', email='{email}')|tojson }};
+    const t_no_file = {{ t('no_file')|tojson }};
 
-    function updateFileLabel(input) {
-        const el = document.getElementById('fileName');
-        el.textContent = input.files && input.files.length ? input.files[0].name : "{{ t('no_file') }}";
-    }
+    // Member data is read from data-* attributes (HTML-escaped by Jinja) instead of being
+    // pasted into JavaScript strings, so names/addresses can't inject script
+    document.querySelectorAll('.js-edit-member').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            openEditModal(btn.dataset.memberId, btn.dataset.email, btn.dataset.name);
+        });
+    });
+    document.querySelectorAll('.js-delete-member').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            openDeleteModal(btn.dataset.memberId, btn.dataset.email);
+        });
+    });
+    document.querySelectorAll('input[type=file][data-file-label]').forEach((input) => {
+        input.addEventListener('change', () => {
+            const el = document.getElementById(input.dataset.fileLabel);
+            el.textContent = input.files && input.files.length ? input.files[0].name : t_no_file;
+        });
+    });
 </script>
 
 {% endblock %}

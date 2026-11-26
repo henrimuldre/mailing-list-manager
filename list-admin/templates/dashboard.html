@@ -20,9 +20,9 @@
 <h3>{{ t("signups") }}</h3>
 <canvas id="signupChart" width="600" height="200"></canvas>
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js">
+<script nonce="{{ csp_nonce() }}" src="https://cdn.jsdelivr.net/npm/chart.js">
 </script>
-<script>
+<script nonce="{{ csp_nonce() }}">
     const ctx = document.getElementById('signupChart').getContext('2d');
 
     // read --accent from CSS and build an rgba with ~0.8 alpha

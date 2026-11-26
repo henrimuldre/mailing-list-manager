@@ -17,7 +17,8 @@
             <h2>{{ t("app_title") }}</h2>
 
             <form method="post" action="{{ url_for('set_list') }}" class="list-switcher">
-                <select name="list_id" onchange="this.form.submit()">
+            {{ csrf_field() }}
+                <select name="list_id" data-autosubmit>
                     {% for l in g.lists %}
                     <option value="{{ l.id }}" {% if g.list_id==l.id %}selected{% endif %}>
                         {{ l.name }}{% if not l.is_active %} {{ t('inactive_alt') }}{% endif %}
@@ -58,8 +59,9 @@
 
             <div class="sidebar-footer">
                 <form method="post" action="{{ url_for('set_language') }}" class="lang-switch">
+            {{ csrf_field() }}
                     {% set langs = t('languages') %}
-                    <select name="language" onchange="this.form.submit()">
+                    <select name="language" data-autosubmit>
                         {% for code, label in langs|dictsort(by='value') %}
                         <option value="{{ code }}" {% if g.language==code %}selected{% endif %}>
                             {{ label }}
@@ -72,7 +74,7 @@
 
                 <div class="sidebar-meta">
                     {{ app_version }} &bull;
-                    <script>document.write(new Date().getFullYear())</script> {{ app_author }}
+                    {{ current_year }} {{ app_author }}
                 </div>
             </div>
         </nav>
@@ -100,7 +102,7 @@
             {% endblock %}
         </div>
     </div>
-    <script>
+    <script nonce="{{ csp_nonce() }}">
         (function () {
             const layout = document.querySelector('.layout');
             const toggles = document.querySelectorAll('[data-sidebar-toggle]');
@@ -161,5 +163,6 @@
             handleWidthChange(mq);
         })();
     </script>
+    <script src="{{ url_for('static', filename='app.js') }}?v={{ app_version }}" defer></script>
 </body>
 </html>

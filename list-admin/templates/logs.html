@@ -20,7 +20,7 @@
 </div>
 {% endfor %}
 
-<script>
+<script nonce="{{ csp_nonce() }}">
     document.querySelectorAll('.log-output').forEach(el => {
         el.scrollTop = el.scrollHeight;
     });

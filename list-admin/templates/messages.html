@@ -63,7 +63,7 @@
             <input type="hidden" name="dir" value="{{ dir }}">
             <input type="hidden" name="page" value="1">
             <label for="messagesPerPage">{{ t("per_page") }}</label>
-            <select id="messagesPerPage" name="per_page" onchange="this.form.submit()">
+            <select id="messagesPerPage" name="per_page" data-autosubmit>
                 {% for option in per_page_options %}
                 <option value="{{ option }}" {% if per_page==option %}selected{% endif %}>{{ option }}</option>
                 {% endfor %}
@@ -91,7 +91,7 @@
 </div>
 
 <div id="messageDetailsModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="messageDetailsTitle">
-    <div class="modal-content modal-content-wide message-details-modal" onclick="event.stopPropagation()">
+    <div class="modal-content modal-content-wide message-details-modal" data-stop-propagation>
         <button type="button" class="modal-close" aria-label="Close" data-message-modal-close>&times;</button>
         <h3 id="messageDetailsTitle">{{ t("message") }}</h3>
         <dl class="message-details">
@@ -119,7 +119,7 @@
     </div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce() }}">
     (function () {
         const tooltip = document.createElement('div');
         tooltip.className = 'message-hover';

@@ -16,8 +16,12 @@ if os.path.isfile(VENV_PYTHON):
             [VENV_PYTHON, os.path.abspath(__file__)] + sys.argv[1:],
         )
 
+import hashlib, hmac, logging, secrets, threading
 from collections import deque
+from datetime import datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from urllib.parse import urlsplit
+from markupsafe import Markup
 from flask import (
     Flask,
     render_template,
@@ -173,6 +177,191 @@ def _env_flag(name, default=False):
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+# ==== Security: password rules, login throttling, CSRF and response headers ====
+# Security events (failed/blocked logins or CSRF failures) are logged to stderr, i.e. the pm2 error log with the client IP.
+# ProxyFix above makes request.remote_addr the real client address behind the host's reverse proxy.
+app.logger.setLevel(logging.INFO)
+
+MIN_PASSWORD_LENGTH = _safe_positive_int(os.getenv("MIN_PASSWORD_LENGTH"), 12)
+MAX_PASSWORD_LENGTH = 1024
+# Failed logins per client IP within the window before that IP is blocked
+LOGIN_MAX_FAILURES_PER_IP = _safe_positive_int(os.getenv("LOGIN_MAX_FAILURES_PER_IP"), 5)
+# Failed logins for one username (from any IP) before that username is blocked. Currently higher so a single attacker can't easily lock a real user out, but distributed guessing is still slowed.
+LOGIN_MAX_FAILURES_PER_USER = _safe_positive_int(os.getenv("LOGIN_MAX_FAILURES_PER_USER"), 20)
+LOGIN_LOCKOUT_SECONDS = _safe_positive_int(os.getenv("LOGIN_LOCKOUT_SECONDS"), 900)
+CSRF_FIELD = "csrf_token"
+VALID_ROLES = {"admin", "user"}
+
+# In-memory, so it resets when the app restarts - fine for now for a single PM2 process
+_login_failures = {}
+_login_failures_lock = threading.Lock()
+# Compared against when the username doesn't exist, so a wrong username takes as long as a wrong password and response times don't reveal which usernames exist
+_DUMMY_PASSWORD_HASH = generate_password_hash(secrets.token_hex(16))
+
+
+def _client_ip():
+    return request.remote_addr or "unknown"
+
+
+def _throttle_limits(username):
+    return (
+        (f"ip:{_client_ip()}", LOGIN_MAX_FAILURES_PER_IP),
+        (f"user:{(username or '').strip().lower()}", LOGIN_MAX_FAILURES_PER_USER),
+    )
+
+
+def _recent_failures(key, now):
+    stamps = [ts for ts in _login_failures.get(key, ()) if now - ts < LOGIN_LOCKOUT_SECONDS]
+    if stamps:
+        _login_failures[key] = stamps
+    else:
+        _login_failures.pop(key, None)
+    return stamps
+
+
+def login_block_seconds(username):
+    """Seconds until this IP/username may try again, or 0 if not blocked."""
+    now = time.time()
+    wait = 0
+    with _login_failures_lock:
+        for key, limit in _throttle_limits(username):
+            stamps = _recent_failures(key, now)
+            if len(stamps) >= limit:
+                wait = max(wait, int(stamps[-limit] + LOGIN_LOCKOUT_SECONDS - now) + 1)
+    return wait
+
+
+def record_login_failure(username):
+    now = time.time()
+    with _login_failures_lock:
+        if len(_login_failures) > 10000:  # bound memory: drop expired entries
+            for key in list(_login_failures):
+                _recent_failures(key, now)
+        for key, _limit in _throttle_limits(username):
+            _login_failures.setdefault(key, []).append(now)
+
+
+def clear_login_failures(username):
+    with _login_failures_lock:
+        for key, _limit in _throttle_limits(username):
+            _login_failures.pop(key, None)
+
+
+def password_problem(password):
+    """Return an error message if the new password doesn't meet the rules, else None."""
+    if len(password or "") < MIN_PASSWORD_LENGTH:
+        return t("password_too_short", min=MIN_PASSWORD_LENGTH)
+    if len(password) > MAX_PASSWORD_LENGTH:
+        return t("password_too_long", max=MAX_PASSWORD_LENGTH)
+    return None
+
+
+def password_version(password_hash):
+    """Short keyed fingerprint of the stored hash, kept in the session cookie. When the
+    password changes the fingerprint no longer matches, so other sessions are logged out.
+    It's an HMAC with the app secret, so the cookie reveals nothing about the hash."""
+    return hmac.new(
+        app.secret_key.encode("utf-8"), (password_hash or "").encode("utf-8"), hashlib.sha256
+    ).hexdigest()[:24]
+
+
+def csrf_token():
+    token = session.get("_csrf")
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session["_csrf"] = token
+    return token
+
+
+def csrf_field():
+    return Markup('<input type="hidden" name="%s" value="%s">') % (CSRF_FIELD, csrf_token())
+
+
+def csp_nonce():
+    if not hasattr(g, "csp_nonce"):
+        g.csp_nonce = secrets.token_urlsafe(16)
+    return g.csp_nonce
+
+
+def safe_redirect_target(target, fallback):
+    """Only follow same-site paths (e.g. from the Referer header). Anything pointing at
+    another host or scheme falls back, so the app can't be used as an open redirect."""
+    if not target:
+        return fallback
+    parts = urlsplit(target)
+    if parts.scheme and parts.scheme not in ("http", "https"):
+        return fallback
+    if parts.netloc and parts.netloc != request.host:
+        return fallback
+    path = parts.path or "/"
+    if not path.startswith("/") or path.startswith(("//", "/\\")):
+        return fallback
+    return path + (f"?{parts.query}" if parts.query else "")
+
+
+@app.before_request
+def csrf_protect():
+    """Every state-changing request must carry the session's CSRF token. Registered before
+    load_user_prefs so a forged request is rejected before anything else runs."""
+    if request.method in ("GET", "HEAD", "OPTIONS"):
+        return None
+    sent = request.form.get(CSRF_FIELD) or request.headers.get("X-CSRF-Token") or ""
+    expected = session.get("_csrf") or ""
+    if expected and sent and hmac.compare_digest(sent, expected):
+        return None
+    app.logger.warning(
+        "CSRF check failed: %s %s ip=%s user=%r",
+        request.method, request.path, _client_ip(), session.get("user"),
+    )
+    g.language = session.get("language") or request.cookies.get("lang", "en")
+    flash(t("csrf_failed"), "error")
+    return redirect(url_for("dashboard") if session.get("user") else url_for("login"))
+
+
+@app.after_request
+def set_security_headers(response):
+    nonce = csp_nonce()
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; "
+        f"script-src 'self' 'nonce-{nonce}' https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "font-src 'self' data:; "
+        "connect-src 'self'; "
+        "object-src 'none'; "
+        "base-uri 'self'; "
+        "form-action 'self'; "
+        "frame-ancestors 'none'",
+    )
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+    response.headers.setdefault(
+        "Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()"
+    )
+    # Sent unconditionally: behind a reverse proxy the app may not see that the client used HTTPS and browsers ignore this header on plain-HTTP responses anyway.
+    # No includeSubDomains: other sites on the same parent domain are not affected.
+    response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
+    if session.get("user") and request.endpoint != "static":
+        # Pages with member lists/messages shouldn't be kept in shared or browser caches
+        response.headers.setdefault("Cache-Control", "no-store")
+    return response
+
+
+def error_text(exc):
+    """User-facing text for an exception caught in a view. Validation errors raised by this
+    app (ValueError/RuntimeError) are shown as-is. Anything else is logged with its traceback
+    and replaced by a generic message, so internal details don't end up in the browser.
+    Call it from inside the except block."""
+    if isinstance(exc, errors.UniqueViolation):
+        return t("error_already_exists")
+    if isinstance(exc, (ValueError, RuntimeError)) and not isinstance(exc, psycopg2.Error):
+        return str(exc)
+    app.logger.exception("Unexpected error in %s %s", request.method, request.path)
+    return t("error_unexpected")
+
+
 def _read_log_tail(path=LOG_FILE_PATH, limit=LOG_TAIL_LINES):
     # Read backwards from the end so large logs (pm2 logs can be tens of MB) are not scanned in full on every page load
     limit = max(1, limit)
@@ -243,6 +432,8 @@ def inject_globals():
         list_address=getattr(g, "list_address", None),
         first_name=getattr(g, "first_name", None),
         globals=global_settings,
+        current_year=datetime.now().year,
+        min_password_length=MIN_PASSWORD_LENGTH,
     )
 
 
@@ -304,7 +495,7 @@ def t(key, **kwargs):
 
 
 # expose in Jinja
-app.jinja_env.globals.update(t=t)
+app.jinja_env.globals.update(t=t, csrf_field=csrf_field, csp_nonce=csp_nonce)
 
 # ==== DB config ====
 DB = dict(
@@ -647,39 +838,73 @@ def login():
 def login_post():
     username = (request.form.get("username") or "").strip()
     password = request.form.get("password") or ""
-    user = get_user(username)
+    ip = _client_ip()
 
-    if user and check_password_hash(user["password_hash"], password):
-        # reset session
-        session.clear()
-        session["user"] = username
-        session.permanent = True  # cookie gets an expiry
-        now = int(time.time())
-        session["login_time"] = now
-        session["last_active"] = now
+    wait = login_block_seconds(username)
+    if wait:
+        app.logger.warning("Login blocked (too many failed attempts): user=%r ip=%s", username[:64], ip)
+        flash(t("login_too_many_attempts", minutes=max(1, (wait + 59) // 60)), "error")
+        return redirect(url_for("login"))
 
-        g.language = user["language"] or "en"
-        first = user.get("first_name") if user else None
+    user = get_user(username) if username else None
+    if user:
+        password_ok = check_password_hash(user["password_hash"], password)
+    else:
+        check_password_hash(_DUMMY_PASSWORD_HASH, password)  # same work as a real check
+        password_ok = False
 
-        # update last login time in DB
+    if not password_ok:
+        record_login_failure(username)
+        app.logger.warning("Failed login: user=%r ip=%s", username[:64], ip)
+        flash(t("login_invalid"), "error")
+        return redirect(url_for("login"))
+
+    clear_login_failures(username)
+    password_hash = user["password_hash"]
+
+    # Hashes made by older Werkzeug versions (e.g. pbkdf2) are upgraded to scrypt now while the plain password is known
+    if not password_hash.startswith("scrypt:"):
         try:
+            password_hash = generate_password_hash(password)
             with get_conn() as c, c.cursor() as cur:
                 cur.execute(
-                    "UPDATE users SET last_login = NOW() WHERE username=%s",
-                    (username,),
+                    "UPDATE users SET password_hash=%s WHERE username=%s",
+                    (password_hash, username),
                 )
+            app.logger.info("Upgraded password hash to scrypt for user=%r", username)
         except Exception:
-            pass
+            app.logger.exception("Could not upgrade password hash for user=%r", username)
+            password_hash = user["password_hash"]
 
-        if user["password_needs_reset"]:
-            flash(t("password_reset_required"), "warning")
-            return redirect(url_for("password_reset"))
+    # reset session (also issues a fresh CSRF token on the next page)
+    session.clear()
+    session["user"] = username
+    session["pwv"] = password_version(password_hash)
+    session.permanent = True  # cookie gets an expiry
+    now = int(time.time())
+    session["login_time"] = now
+    session["last_active"] = now
+    app.logger.info("Successful login: user=%r ip=%s", username, ip)
 
-        flash(t("login_success", name=(first or username)), "success")
-        return redirect(url_for("dashboard"))
+    g.language = user["language"] or "en"
+    first = user.get("first_name") if user else None
 
-    flash(t("login_invalid"), "error")
-    return redirect(url_for("login"))
+    # update last login time in DB
+    try:
+        with get_conn() as c, c.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET last_login = NOW() WHERE username=%s",
+                (username,),
+            )
+    except Exception:
+        pass
+
+    if user["password_needs_reset"]:
+        flash(t("password_reset_required"), "warning")
+        return redirect(url_for("password_reset"))
+
+    flash(t("login_success", name=(first or username)), "success")
+    return redirect(url_for("dashboard"))
 
 
 @app.get("/logout")
@@ -720,12 +945,15 @@ def update_user(
     last_name=None,
     password_needs_reset=None,
 ):
+    """Update the given fields. Returns the new password hash when the password changed,
+    else None (callers use it to keep their own session valid, see password_version)."""
     supports_password_reset = ensure_user_password_reset_column()
+    new_hash = generate_password_hash(password) if password else None
     with get_conn() as c, c.cursor() as cur:
         fields, params = [], []
-        if password:
+        if new_hash:
             fields.append("password_hash=%s")
-            params.append(generate_password_hash(password))
+            params.append(new_hash)
         if password_needs_reset is not None and supports_password_reset:
             fields.append("password_needs_reset=%s")
             params.append(bool(password_needs_reset))
@@ -747,6 +975,7 @@ def update_user(
                 f"UPDATE users SET {', '.join(fields)} WHERE username=%s",
                 tuple(params),
             )
+    return new_hash
 
 
 # ==== Loader (per-request globals) ====
@@ -793,13 +1022,27 @@ def load_user_prefs():
             if username:
                 cur.execute(
                     f"""
-                    SELECT theme, language, first_name, last_name, role, {password_reset_sql}
+                    SELECT theme, language, first_name, last_name, role, password_hash,
+                           {password_reset_sql}
                     FROM users WHERE username=%s
                 """,
                     (username,),
                 )
                 row = cur.fetchone()
-                if row:
+                if row and not hmac.compare_digest(
+                    session.get("pwv") or "", password_version(row["password_hash"])
+                ):
+                    # The password changed since this session logged in (or the session predates this check): end it, like other sessions after a change
+                    app.logger.info(
+                        "Session ended after password change: user=%r ip=%s", username, _client_ip()
+                    )
+                    response = invalidate_session("session_expired_password_changed")
+                    if response is not None:
+                        return response
+                    # on the login page itself: just continue as logged out
+                    username = None
+                    g.password_needs_reset = False
+                elif row:
                     g.user_exists = True
                     g.theme = row["theme"] or "auto"
                     g.language = row["language"] or "en"
@@ -973,7 +1216,7 @@ def messages():
     except (errors.UndefinedTable, errors.UndefinedColumn) as e:
         flash(t("messages_table_missing", error=_db_error_message(e)), "error")
     except Exception as e:
-        flash(t("messages_load_error", error=_db_error_message(e)), "error")
+        flash(t("messages_load_error", error=error_text(e)), "error")
 
     return render_template(
         "messages.html",
@@ -1008,7 +1251,7 @@ def add():
             )
         flash(t("member_added", email=email), "success")
     except Exception as e:
-        flash(t("member_add_error", email=email, error=e), "error")
+        flash(t("member_add_error", email=email, error=error_text(e)), "error")
     return redirect(url_for("members"))
 
 
@@ -1031,7 +1274,7 @@ def edit_member(member_id):
             )
         flash(t("member_updated", email=email), "success")
     except Exception as e:
-        flash(t("member_update_error", error=e), "error")
+        flash(t("member_update_error", error=error_text(e)), "error")
     return redirect(url_for("members"))
 
 
@@ -1053,7 +1296,7 @@ def toggle(member_id):
             new_active = bool(row[0]) if row else True
         flash(t("member_toggled"), "success")
     except Exception as e:
-        flash(t("member_toggle_error", error=e), "error")
+        flash(t("member_toggle_error", error=error_text(e)), "error")
         new_active = True
     q = request.form.get("q", "")
     active_filter = "1" if new_active else "0"
@@ -1071,7 +1314,7 @@ def delete(member_id):
             )
         flash(t("member_deleted"), "success")
     except Exception as e:
-        flash(t("member_delete_error", error=e), "error")
+        flash(t("member_delete_error", error=error_text(e)), "error")
     return redirect(url_for("members"))
 
 
@@ -1265,6 +1508,7 @@ def account():
 def account_post():
     username = session.get("user")
     new_pass = (request.form.get("password") or "").strip() or None
+    current_pass = request.form.get("current_password") or ""
     theme = (request.form.get("theme") or "").strip() or None
     first_name = (request.form.get("first_name") or "").strip() or None
     last_name = (request.form.get("last_name") or "").strip() or None
@@ -1275,14 +1519,29 @@ def account_post():
         flash(t("password_reset_required"), "error")
         return redirect(url_for("password_reset"))
 
-    if new_pass and current_user and check_password_hash(current_user["password_hash"], new_pass):
-        flash(t("password_must_change"), "error")
-        if needs_reset:
-            return redirect(url_for("password_reset"))
-        return redirect(url_for("account"))
+    if new_pass and current_user:
+        # Changing the password needs the current one, so a stolen session cookie alone can't be used to take over the account. Wrong guesses count towards the same throttle as the login form.
+        wait = login_block_seconds(username)
+        if wait:
+            flash(t("login_too_many_attempts", minutes=max(1, (wait + 59) // 60)), "error")
+            return redirect(url_for("account"))
+        if not check_password_hash(current_user["password_hash"], current_pass):
+            record_login_failure(username)
+            app.logger.warning(
+                "Password change with wrong current password: user=%r ip=%s", username, _client_ip()
+            )
+            flash(t("current_password_invalid"), "error")
+            return redirect(url_for("account"))
+        problem = password_problem(new_pass)
+        if problem:
+            flash(problem, "error")
+            return redirect(url_for("account"))
+        if check_password_hash(current_user["password_hash"], new_pass):
+            flash(t("password_must_change"), "error")
+            return redirect(url_for("account"))
 
     try:
-        update_user(
+        new_hash = update_user(
             username,
             password=new_pass,
             theme=theme,
@@ -1290,9 +1549,13 @@ def account_post():
             last_name=last_name,
             password_needs_reset=False if new_pass else None,
         )
+        if new_hash:
+            # this session stays logged in, all other sessions of this user end
+            session["pwv"] = password_version(new_hash)
+            app.logger.info("Password changed: user=%r ip=%s", username, _client_ip())
         flash(t("account_settings_updated"), "success")
     except Exception as e:
-        flash(t("account_settings_error", error=e), "error")
+        flash(t("account_settings_error", error=error_text(e)), "error")
     return redirect(url_for("account"))
 
 
@@ -1312,32 +1575,38 @@ def password_reset():
         new_pass = (request.form.get("password") or "").strip()
         confirm = (request.form.get("confirm_password") or "").strip()
 
+        problem = password_problem(new_pass) if new_pass else None
         if not new_pass:
             flash(t("password_required"), "error")
         elif new_pass != confirm:
             flash(t("passwords_mismatch"), "error")
+        elif problem:
+            flash(problem, "error")
         elif check_password_hash(user["password_hash"], new_pass):
             flash(t("password_must_change"), "error")
         else:
             try:
-                update_user(
+                new_hash = update_user(
                     username,
                     password=new_pass,
                     password_needs_reset=False,
                 )
+                session["pwv"] = password_version(new_hash)
+                app.logger.info("Password reset completed: user=%r ip=%s", username, _client_ip())
                 flash(t("password_reset_success"), "success")
                 return redirect(url_for("dashboard"))
             except Exception as e:
-                flash(t("password_reset_error", error=e), "error")
+                flash(t("password_reset_error", error=error_text(e)), "error")
 
     return render_template("password_reset.html")
 
 
-@app.route("/set-language", methods=["POST", "GET"])
+@app.post("/set-language")
 def set_language():
-    lang = (
-        request.values.get("language") or request.values.get("lang") or "en"
-    ).strip()
+    # POST only (state change, protected by the CSRF check), unknown codes fall back to "en"
+    lang = (request.form.get("language") or request.form.get("lang") or "en").strip()
+    if lang not in (TRANSLATIONS or {"en": {}}):
+        lang = "en"
     session["language"] = lang
     g.language = lang
 
@@ -1347,13 +1616,10 @@ def set_language():
             update_user(username, language=lang)
             flash(t("language_updated"), "success")
         except Exception as e:
-            flash(t("language_error", error=e), "error")
+            flash(t("language_error", error=error_text(e)), "error")
 
-    resp = make_response(
-        redirect(
-            request.referrer or (url_for("dashboard") if username else url_for("login"))
-        )
-    )
+    fallback = url_for("dashboard") if username else url_for("login")
+    resp = make_response(redirect(safe_redirect_target(request.referrer, fallback)))
     resp.set_cookie("lang", lang, max_age=60 * 60 * 24 * 365)  # 1 year
     return resp
 
@@ -1420,6 +1686,14 @@ def users_add():
     if not username or not password:
         flash(t("username_password_required"), "error")
         return redirect(url_for("users"))
+    problem = password_problem(password)
+    if problem:
+        flash(problem, "error")
+        return redirect(url_for("users"))
+    if role not in VALID_ROLES:
+        role = "user"
+    if language not in (TRANSLATIONS or {"en": {}}):
+        language = "en"
 
     try:
         supports_password_reset = ensure_user_password_reset_column()
@@ -1459,9 +1733,10 @@ def users_add():
                         language,
                     ),
                 )
+        app.logger.info("User added: %r (role=%s) by %r", username, role, session.get("user"))
         flash(t("user_added", username=username), "success")
     except Exception as e:
-        flash(t("user_add_error", error=e), "error")
+        flash(t("user_add_error", error=error_text(e)), "error")
     return redirect(url_for("users"))
 
 
@@ -1485,6 +1760,18 @@ def users_edit(username):
     language = (request.form.get("language") or "").strip()
     needs_reset = (request.form.get("password_needs_reset") or "") in {"1", "on", "true", "True"}
 
+    if password:
+        problem = password_problem(password)
+        if problem:
+            flash(problem, "error")
+            return redirect(url_for("users"))
+    if role not in VALID_ROLES:
+        role = "user"
+    if language and language not in (TRANSLATIONS or {"en": {}}):
+        language = ""
+    is_self = username == session.get("user")
+    new_hash = generate_password_hash(password) if password else None
+
     try:
         supports_password_reset = ensure_user_password_reset_column()
         if needs_reset and not supports_password_reset:
@@ -1502,9 +1789,10 @@ def users_edit(username):
             if last_name is not None:
                 fields.append("last_name=%s")
                 params.append(last_name)
-            if password:
+            if new_hash:
+                # the user's other sessions end (see password_version)
                 fields.append("password_hash=%s")
-                params.append(generate_password_hash(password))
+                params.append(new_hash)
             if role:
                 fields.append("role=%s")
                 params.append(role)
@@ -1521,9 +1809,18 @@ def users_edit(username):
                     f"UPDATE users SET {', '.join(fields)} WHERE username=%s",
                     tuple(params),
                 )
+        if is_self:
+            # keep the admin's own session valid after renaming/changing their own password
+            if new_username and new_username != username:
+                session["user"] = new_username
+            if new_hash:
+                session["pwv"] = password_version(new_hash)
+        app.logger.info(
+            "User edited: %r%s by %r", username, " (password changed)" if new_hash else "", session.get("user")
+        )
         flash(t("user_updated", username=new_username or username), "success")
     except Exception as e:
-        flash(t("user_update_error", error=e), "error")
+        flash(t("user_update_error", error=error_text(e)), "error")
 
     return redirect(url_for("users"))
 
@@ -1551,7 +1848,7 @@ def users_delete(username):
             cur.execute("DELETE FROM users WHERE username=%s", (username,))
         flash(t("user_deleted", username=username), "success")
     except Exception as e:
-        flash(t("user_delete_error", error=e), "error")
+        flash(t("user_delete_error", error=error_text(e)), "error")
 
     return redirect(url_for("users"))
 
@@ -1580,7 +1877,7 @@ def lists_page():
     try:
         rows = fetch_admin_mailing_lists(sort=sort, direction=direction)
     except Exception as e:
-        flash(t("list_load_error", error=_db_error_message(e)), "error")
+        flash(t("list_load_error", error=error_text(e)), "error")
 
     return render_template(
         "lists.html",
@@ -1641,7 +1938,7 @@ def lists_add():
                 session["list_id"] = int(row[0])
         flash(t("list_added", address=payload["address"]), "success")
     except Exception as e:
-        flash(t("list_add_error", error=_db_error_message(e)), "error")
+        flash(t("list_add_error", error=error_text(e)), "error")
 
     return redirect(url_for("lists"))
 
@@ -1669,7 +1966,7 @@ def lists_delete(list_id):
 
         flash(t("list_deleted", address=target["address"]), "success")
     except Exception as e:
-        flash(t("list_delete_error", error=_db_error_message(e)), "error")
+        flash(t("list_delete_error", error=error_text(e)), "error")
 
     return redirect(url_for("lists"))
 
@@ -1702,20 +1999,41 @@ def config_page():
                 list_settings["imap_pass"] = ""
                 list_settings["smtp_pass"] = ""
         except Exception as e:
-            flash(t("config_error", error=e), "error")
+            flash(t("config_error", error=error_text(e)), "error")
 
     return render_template(
         "config.html",
         globals=global_settings,
         list=list_settings,
         default_imap_folder=DEFAULT_IMAP_FOLDER,
+        sender_auth_modes=SENDER_AUTH_MODES,
     )
+
+
+SENDER_AUTH_MODES = ("off", "log", "enforce")
+_AUTHSERV_ID_RE = re.compile(r"^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$")
 
 
 @app.post("/config/globals")
 @requires_login
 @requires_admin
 def config_globals_update():
+    # Mail-processor settings that may also come from list/.env: an empty value removes the
+    # row, so the mailer falls back to list/.env and then its default
+    removals = []
+    sender_auth_mode = (request.form.get("SENDER_AUTH_MODE") or "").strip().lower()
+    if sender_auth_mode and sender_auth_mode not in SENDER_AUTH_MODES:
+        flash(t("config_error", error=t("invalid_sender_auth_mode")), "error")
+        return redirect(url_for("config_page"))
+    authserv_ids = [
+        part.strip().lower()
+        for part in (request.form.get("TRUSTED_AUTHSERV_IDS") or "").split(",")
+        if part.strip()
+    ]
+    if any(not _AUTHSERV_ID_RE.match(part) for part in authserv_ids):
+        flash(t("config_error", error=t("invalid_authserv_ids")), "error")
+        return redirect(url_for("config_page"))
+
     updates = {
         k: request.form.get(k)
         for k in [
@@ -1739,13 +2057,36 @@ def config_globals_update():
             return redirect(url_for("config_page"))
         updates["MAX_BYTES"] = str(max_bytes_value)
 
+    for key, value in (
+        ("SENDER_AUTH_MODE", sender_auth_mode),
+        ("TRUSTED_AUTHSERV_IDS", ",".join(authserv_ids)),
+    ):
+        if value:
+            updates[key] = value
+        else:
+            removals.append(key)
+
     try:
         with get_conn() as c, c.cursor() as cur:
             for k, v in updates.items():
-                cur.execute("UPDATE app_config SET value=%s WHERE key=%s", (v, k))
+                # Insert-or-update: on a fresh install the rows don't exist yet and a plain
+                # UPDATE would silently save nothing
+                cur.execute(
+                    """
+                    INSERT INTO app_config (key, value) VALUES (%s, %s)
+                    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+                    """,
+                    (k, v if v is not None else ""),
+                )
+            for k in removals:
+                cur.execute("DELETE FROM app_config WHERE key=%s", (k,))
+        app.logger.info(
+            "Configuration saved by %r: sender auth mode=%s, trusted authserv-ids=%s",
+            session.get("user"), sender_auth_mode or "(not set)", ",".join(authserv_ids) or "(not set)",
+        )
         flash(t("config_updated"), "success")
     except Exception as e:
-        flash(t("config_error", error=e), "error")
+        flash(t("config_error", error=error_text(e)), "error")
     return redirect(url_for("config_page"))
 
 
@@ -1873,7 +2214,7 @@ def config_list_update():
                     cur.execute(update_without_folder, params_without_folder)
         flash(t("list_settings_updated"), "success")
     except Exception as e:
-        flash(t("list_settings_error", error=e), "error")
+        flash(t("list_settings_error", error=error_text(e)), "error")
 
     return redirect(url_for("config_page"))
 
@@ -1910,11 +2251,14 @@ def set_list():
     list_id = request.form.get("list_id")
     try:
         if list_id:
-            session["list_id"] = int(list_id)
+            list_id = int(list_id)
+            if not any(int(L["id"]) == list_id for L in (g.lists or [])):
+                raise ValueError(t("list_not_found"))
+            session["list_id"] = list_id
             flash(t("list_switched"), "success")
     except Exception as e:
-        flash(t("list_switch_error", error=e), "error")
-    return redirect(request.referrer or url_for("dashboard"))
+        flash(t("list_switch_error", error=error_text(e)), "error")
+    return redirect(safe_redirect_target(request.referrer, url_for("dashboard")))
 
 
 # ==== Run ====

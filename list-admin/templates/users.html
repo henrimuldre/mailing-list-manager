@@ -6,7 +6,7 @@
 <div class="panel">
     <div class="panel-header" style="display:flex; justify-content:space-between; align-items:center;">
         <h3>{{ t("all_users") }} ({{ users|length }})</h3>
-        <button type="button" class="btn primary" onclick="openModal('addUserModal')">
+        <button type="button" class="btn primary" data-open-modal="addUserModal">
             + {{ t("add_user") }}
         </button>
     </div>
@@ -90,11 +90,12 @@
 
 
 {# Edit User modal #}
-<div id="editUserModal" class="modal" onclick="closeModal('editUserModal')">
-    <div class="modal-content" onclick="event.stopPropagation()">
-        <span class="modal-close" onclick="closeModal('editUserModal')">&times;</span>
+<div id="editUserModal" class="modal" data-close-modal="editUserModal">
+    <div class="modal-content" data-stop-propagation>
+        <span class="modal-close" data-close-modal="editUserModal">&times;</span>
         <h3>{{ t("edit_user") }}</h3>
         <form id="editUserForm" method="post" class="form">
+            {{ csrf_field() }}
             <div class="form-group">
                 <label for="editUsername">{{ t("username") }}</label>
                 <input type="text" name="username" id="editUsername" required {% if g.role !='admin' %}readonly{% endif %}>
@@ -112,7 +113,7 @@
 
             <div class="form-group">
                 <label for="editPassword">{{ t("new_password") }}</label>
-                <input type="password" name="password" id="editPassword">
+                <input type="password" name="password" id="editPassword" minlength="{{ min_password_length }}" autocomplete="new-password">
             </div>
 
             <div class="form-group">
@@ -150,14 +151,15 @@
 </div>
 
 {# Delete User modal #}
-<div id="deleteUserModal" class="modal" onclick="closeModal('deleteUserModal')">
-    <div class="modal-content" onclick="event.stopPropagation()">
-        <span class="modal-close" onclick="closeModal('deleteUserModal')">&times;</span>
+<div id="deleteUserModal" class="modal" data-close-modal="deleteUserModal">
+    <div class="modal-content" data-stop-propagation>
+        <span class="modal-close" data-close-modal="deleteUserModal">&times;</span>
         <h3>{{ t("delete_user") }}</h3>
         <p id="deleteUserText">{{ t("confirm_delete_user") }}</p>
         <form id="deleteUserForm" method="post">
+            {{ csrf_field() }}
             <div class="form-actions" style="display:flex; gap:10px; justify-content:flex-end;">
-                <button type="button" class="btn" onclick="closeModal('deleteUserModal')">{{ t("cancel") }}</button>
+                <button type="button" class="btn" data-close-modal="deleteUserModal">{{ t("cancel") }}</button>
                 <button type="submit" class="btn danger">{{ t("delete") }}</button>
             </div>
         </form>
@@ -165,12 +167,13 @@
 </div>
 
 {# Add User modal #}
-<div id="addUserModal" class="modal" onclick="closeModal('addUserModal')">
-    <div class="modal-content" onclick="event.stopPropagation()">
-        <span class="modal-close" role="button" aria-label="Close" onclick="closeModal('addUserModal')">&times;</span>
+<div id="addUserModal" class="modal" data-close-modal="addUserModal">
+    <div class="modal-content" data-stop-propagation>
+        <span class="modal-close" role="button" aria-label="Close" data-close-modal="addUserModal">&times;</span>
         <h3 style="margin-top:0;">{{ t("add_user") }}</h3>
 
         <form method="post" action="{{ url_for('users_add') }}" class="form">
+            {{ csrf_field() }}
             <div class="form-group">
                 <label for="addUsername">{{ t("username") }}</label>
                 <input type="text" id="addUsername" name="username" required>
@@ -188,7 +191,7 @@
 
             <div class="form-group">
                 <label for="addPassword">{{ t("password") }}</label>
-                <input type="password" id="addPassword" name="password" required>
+                <input type="password" id="addPassword" name="password" required minlength="{{ min_password_length }}" autocomplete="new-password">
             </div>
 
             <div class="form-group">
@@ -226,7 +229,7 @@
 </div>
 
 
-<script>
+<script nonce="{{ csp_nonce() }}">
     function openEditUser({ username, firstName, lastName, role, language, needsReset }) {
         document.getElementById("editUsername").value = username;
         document.getElementById("editFirstName").value = firstName || "";

@@ -122,7 +122,22 @@ list-admin/.venv/bin/python scripts/migrate_mail_credentials.py
 ```
 
 The script auto-loads `list-admin/.env` and `list/.env`, skips rows already stored as
-`enc:v1:...` and only updates rows that still contain legacy plaintext values.
+`enc:v1:...` and only updates rows that still contain legacy plaintext values. Both services
+log a warning when they read a password that is still stored in plaintext.
+
+#### Rotating `MAIL_CREDENTIALS_KEY`
+
+1. Generate a new key (command above).
+2. In **both** `.env` files, put the new key in `MAIL_CREDENTIALS_KEY` and the old one in
+   `MAIL_CREDENTIALS_OLD_KEYS`, then restart the admin UI.
+3. Re-encrypt everything with the new key:
+
+   ```bash
+   list-admin/.venv/bin/python scripts/migrate_mail_credentials.py --rotate --dry-run
+   list-admin/.venv/bin/python scripts/migrate_mail_credentials.py --rotate
+   ```
+
+4. Remove `MAIL_CREDENTIALS_OLD_KEYS` from both files and restart the admin UI again.
 
 ### 4. Create the database schema
 
@@ -132,13 +147,32 @@ Import the canonical schema:
 psql -U <db-user> -d <db-name> -f list-admin/sql/schema.sql
 ```
 
-You will also need initial data in:
+Besides the schema, the database only needs **one admin user**, so you can log in.
+Everything else is set up later in the admin UI.
 
-- `app_config`
-- `mailing_lists`
-- at least one admin user in `users`
+#### Create the first admin user
 
-The app does not currently ship with a full installer, so those initial rows must be created manually or with your own seed SQL.
+1. Make a password hash. The command asks for the password - it isn't shown or saved.
+   Use at least 12 characters (the minimum the admin UI enforces for new passwords).
+
+   ```bash
+   list-admin/.venv/bin/python -c "import getpass; from werkzeug.security import generate_password_hash; print(generate_password_hash(getpass.getpass('Admin password: ')))"
+   ```
+
+2. Open `psql -U <db-user> -d <db-name>` and insert the user, pasting the whole hash
+   (it starts with `scrypt:`) between the single quotes:
+
+   ```sql
+   INSERT INTO users (username, password_hash, role) VALUES ('admin', 'scrypt:...', 'admin');
+   ```
+
+Further users can then be added in the admin UI under **Users**.
+
+#### Mailing lists and settings
+
+- **Mailing lists** are created in the admin UI under **Manage Lists**.
+- **Settings** all have built-in defaults, so the `app_config` table can start empty. Saving
+  the admin UI's **Configuration** page stores your values to the database. For settings that can also be configured with the `.env` file, the order is: Configuration page → `.env` → built-in default.
 
 ### 5. Start the admin UI
 
@@ -268,9 +302,40 @@ public port forwarding instead of a traditional reverse proxy.
 For either option, set `LIST_ADMIN_HOST` and `LIST_ADMIN_PORT` in `list-admin/.env`
 to the address and port the Flask process should bind to.
 
+## Security
+
+- **Protect the `.env` files.** They hold the database password, `FLASK_SECRET` and
+  `MAIL_CREDENTIALS_KEY`, which together decrypt every stored mailbox password:
+  `chmod 600 list/.env list-admin/.env`. Don't pass these values to PM2 as environment
+  variables (PM2 saves them in plain text in `~/.pm2/dump.pm2`). The app reads `.env` itself.
+- **Login protection:** failed logins are rate-limited per IP and per username and logged with
+  the client IP. New passwords need at least `MIN_PASSWORD_LENGTH` characters (default 12).
+  Changing your own password requires the current one and ends the user's other sessions.
+- **Every form carries a CSRF token** and the app sends a Content-Security-Policy (no inline
+  scripts), `X-Frame-Options: DENY`, HSTS and related headers.
+- **Sender authentication:** on closed lists the `From` address alone can be forged. With
+  `SENDER_AUTH_MODE` the mailer also checks the SPF/DKIM/DMARC results your mail server writes
+  into `Authentication-Results`. It defaults to `log`: watch `mlist.log` for
+  `sender auth ... pass` on real member mail, set `TRUSTED_AUTHSERV_IDS` to your mail server's
+  name, then switch to `enforce`. Both can be set on the admin UI's **Configuration** page
+  (takes priority) or in `list/.env`. The default is `log`, if it isn't set anywhere.
+- IMAP and SMTP connections verify the server's TLS certificate.
+
+## Upgrading from v1.2.0
+
+1. Update the code and reinstall dependencies in both venvs (`pip install -r requirements.txt`).
+2. Optional: add the new settings from the `.env.example` files (all have safe defaults).
+3. Make new lists closed by default in existing databases:
+
+   ```sql
+   ALTER TABLE mailing_lists ALTER COLUMN open_posting SET DEFAULT false;
+   ```
+
+4. Restart the admin UI. Everyone has to log in once more after the upgrade.
+
 ## To-do in the future
 
-- Add seed SQL or an installation script for `app_config`, `mailing_lists` and the first admin user
+- First-run setup page in the admin UI for creating the first admin user (protected by a one-time setup code), instead of the manual SQL steps
 - Replace Flask's built-in server with Gunicorn or another WSGI server for production
 - Add automated tests
 

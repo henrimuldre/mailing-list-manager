@@ -6,6 +6,7 @@
     <h3>{{ t("account") }}</h3>
 
     <form method="post" action="{{ url_for('account_post') }}" class="form">
+            {{ csrf_field() }}
         <!-- Username (admin only) -->
         <div class="form-group">
             <label for="username">{{ t("username") }}</label>
@@ -24,10 +25,18 @@
             <input id="last_name" type="text" name="last_name" value="{{ last_name or '' }}" autocomplete="family-name">
         </div>
 
-        <!-- New password -->
+        <!-- New password (changing it requires the current password) -->
         <div class="form-group">
             <label for="password">{{ t("new_password") }}</label>
-            <input id="password" type="password" name="password" autocomplete="new-password">
+            <input id="password" type="password" name="password" autocomplete="new-password"
+                minlength="{{ min_password_length }}">
+            <small class="muted">{{ t("password_min_length_hint", min=min_password_length) }}</small>
+        </div>
+
+        <div class="form-group">
+            <label for="current_password">{{ t("current_password") }}</label>
+            <input id="current_password" type="password" name="current_password" autocomplete="current-password">
+            <small class="muted">{{ t("current_password_hint") }}</small>
         </div>
 
         <div class="form-actions">
@@ -40,6 +49,7 @@
     <h3>{{ t("appearance") }}</h3>
 
     <form method="post" action="{{ url_for('account_post') }}" id="themeForm">
+            {{ csrf_field() }}
         <div class="theme-grid">
 
             {# Auto (system) #}
@@ -198,7 +208,7 @@
             <button type="submit" class="btn primary">{{ t("save_theme") }}</button>
         </div>
     </form>
-    <script>
+    <script nonce="{{ csp_nonce() }}">
         document.querySelectorAll('input[name="theme"]').forEach((el) => {
             el.addEventListener('change', () => {
                 // Live preview the theme; saving persists to DB

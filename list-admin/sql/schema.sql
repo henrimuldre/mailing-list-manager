@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS public.mailing_lists (
     imap_pass text,
     smtp_user text,
     smtp_pass text,
-    open_posting boolean DEFAULT true,
+    open_posting boolean DEFAULT false,
     imap_host text,
     imap_port integer DEFAULT 993,
     smtp_host text,

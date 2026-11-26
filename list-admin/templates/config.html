@@ -5,6 +5,7 @@
 <div class="panel">
     <h2>{{ t("global_settings") }}</h2>
     <form method="post" action="{{ url_for('config_globals_update') }}" class="form-vertical">
+            {{ csrf_field() }}
         <label>
             {{ t("idle_timeout") }}
             <input type="number" name="IDLE_TIMEOUT_SECONDS" value="{{ globals.IDLE_TIMEOUT_SECONDS or 1800 }}">
@@ -38,6 +39,29 @@
             <input type="text" name="DANGEROUS_EXT"
                 value="{{ globals.DANGEROUS_EXT or '.exe,.bat,.cmd,.scr,.js,.vbs,.ps1,.jar,.msi' }}">
         </label>
+
+        <h3>{{ t("sender_auth_heading") }}</h3>
+        <label>
+            {{ t("sender_auth_mode") }}
+            {% set current_mode = (globals.SENDER_AUTH_MODE or '')|lower %}
+            <select name="SENDER_AUTH_MODE">
+                <option value="" {% if current_mode not in sender_auth_modes %}selected{% endif %}>
+                    {{ t("sender_auth_not_set") }}
+                </option>
+                {% for mode in sender_auth_modes %}
+                <option value="{{ mode }}" {% if current_mode == mode %}selected{% endif %}>
+                    {{ t("sender_auth_" ~ mode) }}
+                </option>
+                {% endfor %}
+            </select>
+            <small class="muted">{{ t("sender_auth_hint") }}</small>
+        </label>
+        <label>
+            {{ t("trusted_authserv_ids") }}
+            <input type="text" name="TRUSTED_AUTHSERV_IDS" value="{{ globals.TRUSTED_AUTHSERV_IDS or '' }}"
+                placeholder="mail.example.com" autocomplete="off" spellcheck="false">
+            <small class="muted">{{ t("trusted_authserv_ids_hint") }}</small>
+        </label>
         <div class="form-actions">
             <button type="submit" class="btn primary">{{ t("save") }}</button>
         </div>
@@ -48,6 +72,7 @@
 <div class="panel">
     <h2>{{ t("list_settings") }} - {{ list.name }}</h2>
     <form method="post" action="{{ url_for('config_list_update') }}" class="form-vertical">
+            {{ csrf_field() }}
         <h3>{{ t("general_settings") }}</h3>
         <label>
             {{ t("is_active") }}
@@ -67,6 +92,7 @@
         <label>
             {{ t("subject_tag") }}
             <input type="text" name="subject_tag" value="{{ list.subject_tag or '' }}">
+            <small class="muted">{{ t("subject_tag_hint") }}</small>
         </label>
         <label>
             {{ t("open_posting") }}
